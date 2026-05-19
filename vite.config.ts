@@ -437,7 +437,7 @@ ${subjects}`;
             hash: commits[0]?.hash || 'unknown',
             buildTime: Date.now(),
           });
-          const outDir = path.resolve(__dirname, 'dist/fund-manager');
+          const outDir = path.resolve(__dirname, resolvedOutDir);
           writeFileSync(path.resolve(outDir, 'version.json'), versionJson, 'utf-8');
         },
       },
