@@ -81,6 +81,25 @@ const holdingsPayload = {
 const marketText =
   'v_sh000001="1~上证指数~000001~3050.12~~~~~~~~~~~~~~~~~~~~~~~~~~~20260518150000~12.34~0.41";\n' +
   'v_sz399006="51~创业板指~399006~2200.50~~~~~~~~~~~~~~~~~~~~~~~~~~~20260518150000~-8.80~-0.40";';
+const stockQuoteText =
+  'v_s_sh600519="1~贵州茅台~600519~100.00~0.00~3.00";\n' +
+  'v_s_sz300750="1~宁德时代~300750~100.00~0.00~1.00";';
+const eastMoneyLatestNavText =
+  'var apidata={content:"<table><tr><td>2026-05-18</td><td>1.2000</td><td>1.2000</td><td>1.50%</td></tr><tr><td>2026-05-15</td><td>1.1800</td><td>1.1800</td><td>0.20%</td></tr></table>"};';
+const buildEastMoneyHistoricalNavText = (length: number, startIndex = 0) =>
+  `var apidata={content:"<table>${Array.from({ length }, (_, index) => {
+    const navIndex = startIndex + index;
+    const month = String(Math.floor(navIndex / 28) + 1).padStart(2, '0');
+    const day = String((navIndex % 28) + 1).padStart(2, '0');
+    const nav = (1.4 - navIndex * 0.002).toFixed(4);
+    return `<tr><td>2026-${month}-${day}</td><td>${nav}</td><td>${nav}</td><td>0.10%</td></tr>`;
+  }).join('')}</table>"};`;
+const eastMoneyHistoricalNavText = `var apidata={content:"<table>${Array.from({ length: 130 }, (_, index) => {
+  const month = String(Math.floor(index / 28) + 1).padStart(2, '0');
+  const day = String((index % 28) + 1).padStart(2, '0');
+  const nav = (1.4 - index * 0.002).toFixed(4);
+  return `<tr><td>2026-${month}-${day}</td><td>${nav}</td><td>${nav}</td><td>0.10%</td></tr>`;
+}).join('')}</table>"};`;
 
 const eastMoneyNewsPayload = {
   data: {
@@ -115,6 +134,14 @@ const eastMoneyFundFlowPayload = {
     diff: [
       { f12: 'BK0800', f14: '人工智能', f3: 2.1, f62: 3200000000, f184: 4.5 },
       { f12: 'BK0428', f14: '新能源', f3: 1.2, f62: 1800000000, f184: 2.8 },
+    ],
+  },
+};
+const unavailableEastMoneyFundFlowPayload = {
+  data: {
+    diff: [
+      { f12: 'BK0800', f14: '人工智能', f3: '-', f62: '-', f184: '-' },
+      { f12: 'BK0428', f14: '新能源', f3: '-', f62: '-', f184: '-' },
     ],
   },
 };
@@ -177,6 +204,7 @@ const mockBaseSuccessfulFetches = (
       );
     }
     if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+    if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
     if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
     if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNews));
     if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
@@ -292,6 +320,19 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('marketSnapshot');
     expect(aiBody.messages[0].content).toContain('newsSnapshot');
     expect(aiBody.messages[0].content).toContain('fundFlowSnapshot');
+    expect(aiBody.messages[0].content).toContain('underlyingExposures');
+    expect(aiBody.messages[0].content).toContain('底层行业/主题暴露数量: 2');
+    expect(aiBody.messages[0].content).toContain('底层最大暴露: 消费');
+    expect(aiBody.messages[0].content).toContain('贵州茅台');
+    expect(aiBody.messages[0].content).toContain('量化信号数据: available');
+    expect(aiBody.messages[0].content).toContain('量化信号覆盖: 1/1');
+    expect(aiBody.messages[0].content).toContain('组合量化信号:');
+    expect(aiBody.messages[0].content).toContain('quantSignal');
+    expect(aiBody.messages[0].content).toContain('valuationStatus');
+    expect(aiBody.messages[0].content).toContain('riskRadar');
+    expect(aiBody.messages[0].content).toContain('组合风险雷达');
+    expect(aiBody.messages[0].content).toContain('严禁仅凭基金名称判断当前组合持有什么主题');
+    expect(aiBody.messages[0].content).toContain('如果只是市场资金流主题，必须明确是“市场观察主题”');
     expect(aiBody.messages[0].content).toContain('上证指数');
     expect(aiBody.messages[0].content).toContain('A股人工智能板块午后走强');
     expect(aiBody.messages[0].content).toContain('资金流入最强方向: 人工智能');
@@ -303,6 +344,8 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('未持有基金B');
     expect(aiBody.messages[0].content).toContain('未持有自选建仓候选数量: 1');
     expect(aiBody.messages[0].content).toContain('资金流兜底建仓候选数量:');
+    expect(aiBody.messages[0].content).toContain('当前A股阶段:');
+    expect(aiBody.messages[0].content).toContain('收盘后写“明日观察点”，收盘前写“今日观察点”');
     expect(aiBody.messages[1].content).toContain('是否适合加仓');
 
     const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
@@ -315,6 +358,79 @@ describe('telegram ai reminder worker', () => {
     expect(telegramBody.chat_id).toBe('123456');
     expect(telegramBody.text).toContain('养基AI持仓分析');
     expect(telegramBody.text).toContain('组合整体表现良好。');
+  });
+
+  it('Telegram 发送“量化分析”只返回客观量化信号且不调用 AI', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '量化分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/chat/completions'))).toBe(false);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('morningstar.cn'))).toBe(false);
+    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('养基AI量化分析');
+    expect(telegramBody.text).toContain('组合量化信号');
+    expect(telegramBody.text).toContain('估值因子暂缺');
+    expect(telegramBody.text).toContain('测试基金A');
+  });
+
+  it('量化分析会分页读取历史净值且样本够 21 条时输出部分信号', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: {
+              'fund-manager-sync.json': {
+                content: JSON.stringify({
+                  ...backupPayload,
+                  funds: [{ ...backupPayload.funds[0], code: '000003', name: '部分样本基金C' }],
+                }),
+              },
+            },
+          }),
+        );
+      }
+      if (url.includes('fundf10.eastmoney.com') && url.includes('page=1')) {
+        return Promise.resolve(new Response(buildEastMoneyHistoricalNavText(20, 0)));
+      }
+      if (url.includes('fundf10.eastmoney.com') && url.includes('page=2')) {
+        return Promise.resolve(new Response(buildEastMoneyHistoricalNavText(1, 20)));
+      }
+      if (url.includes('fundf10.eastmoney.com')) {
+        return Promise.resolve(new Response('var apidata={content:"<table></table>"};'));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '量化分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('page=2'))).toBe(true);
+    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('覆盖：1/1 只');
+    expect(telegramBody.text).toContain('部分样本基金C');
+    expect(telegramBody.text).toContain('20日');
+    expect(telegramBody.text).not.toContain('历史净值样本少于 21 条');
   });
 
   it('配置 CRON_SECRET 后拒绝未授权手动触发', async () => {
@@ -531,6 +647,44 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('资金流数据暂不可用，本次仅基于市场情绪和新闻利好判断');
   });
 
+  it('资金流盘前未形成时标记为 missing 且说明非接口失败', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+        return Promise.resolve(jsonResponse(unavailableEastMoneyFundFlowPayload));
+      }
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('chat/completions')) {
+        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '盘前资金流分析' } }] }));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/run', { method: 'POST' }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const aiBody = findAiRequestBody(fetchMock);
+    expect(aiBody.messages[0].content).toContain('资金流数据: missing');
+    expect(aiBody.messages[0].content).toContain('"unavailableReason": "preMarketOrOffHours"');
+    expect(aiBody.messages[0].content).toContain('资金流数据暂未形成，可能因当前处于盘前/非交易时段');
+    expect(aiBody.messages[0].content).toContain('东方财富暂未返回有效主力净流入数据');
+    expect(aiBody.messages[0].content).toContain('不得编造资金流入方向或金额');
+    expect(aiBody.messages[0].content).not.toContain('资金流入最强方向: 人工智能');
+  });
+
   it('Telegram 发送“分析”会触发短版分析并回复当前 chat', async () => {
     const fetchMock = vi.fn();
     mockBaseSuccessfulFetches(fetchMock);
@@ -559,11 +713,155 @@ describe('telegram ai reminder worker', () => {
     expect(telegramBody.chat_id).toBe('123456');
     expect(telegramBody.text).toContain('养基AI持仓分析');
     const aiBody = findAiRequestBody(fetchMock);
-    expect(aiBody.messages[1].content).toContain('Telegram 短版分析');
-    expect(aiBody.messages[1].content).toContain('1200 字以内');
-    expect(aiBody.messages[1].content).toContain('资金流入最强方向');
-    expect(aiBody.messages[1].content).toContain('今日建仓候选/观察');
-    expect(aiBody.messages[1].content).toContain('今日加仓候选');
+    expect(aiBody.messages[1].content).toContain('简短但全面');
+    expect(aiBody.messages[1].content).toContain('500 字以内');
+    expect(aiBody.messages[1].content).toContain('结论、加仓、减仓/清仓、建仓主题、风险、数据');
+    expect(aiBody.messages[1].content).toContain('风险只列 1-2 个最大风险');
+    expect(aiBody.messages[1].content).toContain('数据行简要标注市场、资金流、新闻、量化、底层持仓');
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
+  });
+
+  it('Telegram 短版分析会复用 Morningstar 持仓缓存', async () => {
+    const customPayload = {
+      ...backupPayload,
+      funds: [{ ...backupPayload.funds[0], code: '999999', name: '缓存测试基金' }],
+      watchlists: [],
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(customPayload) } } }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+        return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
+      }
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('chat/completions')) {
+        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '组合整体表现良好。' } }] }));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await worker.fetch(
+        new Request('https://worker.example/telegram', {
+          method: 'POST',
+          body: JSON.stringify({ message: { text: '分析', chat: { id: 123456 } } }),
+        }),
+        env,
+      );
+      expect(response.status).toBe(200);
+    }
+
+    const morningstarCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('morningstar.cn'));
+    expect(morningstarCalls).toHaveLength(1);
+  });
+
+  it('Telegram 发送“今日盈利”会直接返回收益摘要且不调用 AI', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '今日盈利', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; handled: string; sentMessages: number };
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ ok: true, handled: 'todayProfit', sentMessages: 1 });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(false);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('morningstar.cn'))).toBe(false);
+    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { chat_id: string; text: string };
+    expect(telegramBody.chat_id).toBe('123456');
+    expect(telegramBody.text).toContain('养基AI今日盈利');
+    expect(telegramBody.text).toContain('今日总盈亏：+1.80 元');
+    expect(telegramBody.text).toContain('今日收益率：+1.52%');
+    expect(telegramBody.text).toContain('测试基金A');
+    expect(telegramBody.text).toContain('贡献最高：测试基金A +1.80 元');
+  });
+
+  it('Telegram 发送“今日盘中实时收益”会显示短版盘中收益', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+        );
+      }
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyLatestNavText));
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(stockQuoteText));
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '今日盘中实时收益', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(false);
+    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('盘中收益');
+    expect(telegramBody.text).toContain('盘中估算：+2.69 元（+2.29%）');
+    expect(telegramBody.text).toContain('可估算：1/1 只');
+    expect(telegramBody.text).toContain('贡献：');
+    expect(telegramBody.text).toContain('1. 测试基金A +2.69 元 (+2.24%)');
+    expect(telegramBody.text).not.toContain('覆盖权重');
+    expect(telegramBody.text).not.toContain('当前总资产');
+  });
+
+  it('Telegram 发送“详细盘中收益”会显示完整盘中收益', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+        );
+      }
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyLatestNavText));
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(stockQuoteText));
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '详细盘中收益', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('养基AI盘中实时收益');
+    expect(telegramBody.text).toContain('今日总盈亏：+2.69 元');
+    expect(telegramBody.text).toContain('覆盖权重 13.70%');
+    expect(telegramBody.text).toContain('当前总资产');
   });
 
   it('Telegram 发送“详细分析”会触发完整分析问题', async () => {
@@ -606,7 +904,7 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('1000 字以内');
   });
 
-  it('Telegram 发送“建仓”会触发建仓候选专项短答', async () => {
+  it('Telegram 发送“建仓”会触发建仓主题观察专项短答', async () => {
     const fetchMock = vi.fn();
     mockBaseSuccessfulFetches(fetchMock);
     vi.stubGlobal('fetch', fetchMock);
@@ -621,22 +919,22 @@ describe('telegram ai reminder worker', () => {
 
     expect(response.status).toBe(200);
     const aiBody = findAiRequestBody(fetchMock);
-    expect(aiBody.messages[1].content).toContain('今天哪只未持有基金最适合建仓');
-    expect(aiBody.messages[1].content).toContain('建仓候选优先从自选未持有基金中选择');
-    expect(aiBody.messages[1].content).toContain('严禁推荐已经持有的基金');
+    expect(aiBody.messages[1].content).toContain('今天哪个主题方向最值得建仓观察');
+    expect(aiBody.messages[1].content).toContain('建仓观察只推荐主题方向');
+    expect(aiBody.messages[1].content).toContain('不输出具体基金名称或基金代码');
+    expect(aiBody.messages[1].content).toContain('主题可以和已有持仓重合');
     expect(aiBody.messages[1].content).toContain('资金流入最强方向');
-    expect(aiBody.messages[1].content).toContain('市场情绪、今日利好方向、资金流入最强方向、今日建仓候选/观察、建仓方式、放弃建仓条件');
-    expect(aiBody.messages[1].content).toContain('不要输出“为什么不选已有基金”');
-    expect(aiBody.messages[1].content).toContain('今日建仓观察');
-    expect(aiBody.messages[1].content).toContain('不得把观察方向写成买入建议');
+    expect(aiBody.messages[1].content).toContain('市场情绪、今日利好方向、资金流入最强方向、今日建仓主题观察、观察方式、放弃观察条件');
+    expect(aiBody.messages[1].content).toContain('今日暂无明确建仓主题，仅做观察');
+    expect(aiBody.messages[1].content).toContain('不得把主题观察写成现在立即买入');
     expect(aiBody.messages[1].content).toContain('最终回复不得出现 buildCandidates、fallbackBuildCandidates');
     expect(aiBody.messages[1].content).not.toContain('为什么不是已有基金');
     expect(aiBody.messages[0].content).toContain('未持有基金B');
     expect(aiBody.messages[0].content).toContain('"heldFundCodes"');
-    expect(aiBody.messages[1].content).toContain('不得硬选基金');
+    expect(aiBody.messages[0].content).toContain('当前A股阶段:');
   });
 
-  it('建仓候选为空时使用资金流方向兜底候选并标明来源', async () => {
+  it('建仓候选为空时仍只要求输出主题方向', async () => {
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('api.github.com/gists')) {
@@ -680,8 +978,10 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('fallbackBuildCandidates');
     expect(aiBody.messages[0].content).toContain('fundFlowFallback');
     expect(aiBody.messages[0].content).toContain('人工智能');
-    expect(aiBody.messages[1].content).toContain('候选来源：资金流方向兜底，非你的自选基金');
-    expect(aiBody.messages[1].content).toContain('严禁推荐已经持有的基金');
+    expect(aiBody.messages[1].content).toContain('建仓观察只推荐主题方向');
+    expect(aiBody.messages[1].content).toContain('不输出具体基金名称或基金代码');
+    expect(aiBody.messages[1].content).not.toContain('候选来源：资金流方向兜底，非你的自选基金');
+    expect(aiBody.messages[1].content).not.toContain('严禁推荐已经持有的基金');
   });
 
   it('Telegram 短版输出过长时会截断', async () => {
@@ -812,7 +1112,7 @@ describe('telegram ai reminder worker', () => {
 
     const aiBody = findAiRequestBody(fetchMock);
     expect(aiBody.messages[1].content).toContain('收盘分析');
-    expect(aiBody.messages[1].content).toContain('明日观察点');
+    expect(aiBody.messages[1].content).toContain('明日触发条件');
     const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
     const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
     expect(telegramBody.text).toContain('养基AI收盘分析');
@@ -1058,6 +1358,146 @@ describe('telegram ai reminder worker', () => {
     expect(analysisBody.group_id).toBe(123456789);
     expect(analysisBody.message).toContain('养基AI持仓分析');
     expect(analysisBody.message).toContain('OneBot 分析结果');
+  });
+
+  it('OneBot 授权用户群内触发今日盈利会直接回复收益摘要', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('onebot.example/send_group_msg')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      buildOneBotRequest({
+        post_type: 'message',
+        message_type: 'group',
+        group_id: 123456789,
+        user_id: 987654321,
+        raw_message: '[CQ:at,qq=123456] 今日盈利',
+      }),
+      oneBotEnv,
+    );
+    const body = (await response.json()) as { ok: boolean; handled: string; sentMessages: number };
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ ok: true, handled: 'todayProfit', sentMessages: 1 });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(false);
+    const oneBotCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('onebot.example/send_group_msg'));
+    const oneBotBody = JSON.parse(oneBotCall?.[1].body as string) as { group_id: number; message: string };
+    expect(oneBotBody.group_id).toBe(123456789);
+    expect(oneBotBody.message).toContain('养基AI今日盈利');
+    expect(oneBotBody.message).toContain('今日总盈亏：+1.80 元');
+  });
+
+  it('OneBot 授权用户群内触发盘中收益会显示短版收益', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('onebot.example/send_group_msg')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+        );
+      }
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyLatestNavText));
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(stockQuoteText));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      buildOneBotRequest({
+        post_type: 'message',
+        message_type: 'group',
+        group_id: 123456789,
+        user_id: 987654321,
+        raw_message: '盘中收益',
+      }),
+      oneBotEnv,
+    );
+
+    expect(response.status).toBe(200);
+    const oneBotCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('onebot.example/send_group_msg'));
+    const oneBotBody = JSON.parse(oneBotCall?.[1].body as string) as { message: string };
+    expect(oneBotBody.message).toContain('盘中收益');
+    expect(oneBotBody.message).toContain('盘中估算：+2.69 元（+2.29%）');
+    expect(oneBotBody.message).toContain('可估算：1/1 只');
+    expect(oneBotBody.message).toContain('1. 测试基金A +2.69 元 (+2.24%)');
+    expect(oneBotBody.message).not.toContain('覆盖权重');
+  });
+
+  it('OneBot 授权用户群内 @ 机器人触发分析', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('onebot.example/send_group_msg')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+        return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
+      }
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('chat/completions')) {
+        return Promise.resolve(jsonResponse({ choices: [{ message: { content: 'OneBot @ 分析结果' } }] }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      buildOneBotRequest({
+        post_type: 'message',
+        message_type: 'group',
+        group_id: 123456789,
+        user_id: 987654321,
+        raw_message: '[CQ:at,qq=123456] 分析',
+      }),
+      oneBotEnv,
+    );
+    const body = (await response.json()) as { ok: boolean; handled: string; sentMessages: number };
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.handled).toBe('analysis');
+    expect(body.sentMessages).toBe(2);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(true);
+  });
+
+  it('OneBot 未识别指令时静默忽略', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('onebot.example/send_group_msg')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      buildOneBotRequest({
+        post_type: 'message',
+        message_type: 'group',
+        group_id: 123456789,
+        user_id: 987654321,
+        raw_message: '[CQ:at,qq=123456] 你好',
+      }),
+      oneBotEnv,
+    );
+    const body = (await response.json()) as { ok: boolean; ignored: boolean };
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ ok: true, ignored: true });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(false);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('onebot.example/send_group_msg'))).toBe(false);
   });
 
   it('Telegram webhook secret 不匹配时返回 401', async () => {
