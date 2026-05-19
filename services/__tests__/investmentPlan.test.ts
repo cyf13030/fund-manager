@@ -10,6 +10,12 @@ import {
   deleteInvestmentPlan,
 } from '../investmentPlan';
 
+const autoSyncMock = vi.hoisted(() => ({
+  syncNowWithAutoGist: vi.fn(),
+}));
+
+vi.mock('../gistAutoSync', () => autoSyncMock);
+
 // --- helpers ---
 
 const buildPlan = (overrides?: Partial<InvestmentPlan>): InvestmentPlan => ({
@@ -48,6 +54,7 @@ const mockToday = (dateStr: string) => {
 describe('executeInvestmentPlans', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    autoSyncMock.syncNowWithAutoGist.mockReset();
   });
 
   it('lastExecutedDate 为今日时跳过，防止重复执行', async () => {
@@ -119,6 +126,7 @@ describe('executeInvestmentPlans', () => {
 
     // 验证计划 lastExecutedDate 更新
     expect(planUpdateSpy).toHaveBeenCalledWith(1, { lastExecutedDate: '2026-05-14' });
+    expect(autoSyncMock.syncNowWithAutoGist).toHaveBeenCalledTimes(1);
 
     restore();
   });
@@ -200,6 +208,7 @@ describe('executeInvestmentPlans', () => {
 
     expect(fundUpdateSpy).toHaveBeenCalledTimes(2);
     expect(planUpdateSpy).toHaveBeenCalledTimes(2);
+    expect(autoSyncMock.syncNowWithAutoGist).toHaveBeenCalledTimes(2);
 
     restore();
   });
@@ -242,28 +251,41 @@ describe('addInvestmentPlan', () => {
       frequency: 'daily',
       createdAt: '2026-05-14',
     });
+    expect(autoSyncMock.syncNowWithAutoGist).toHaveBeenCalledTimes(1);
 
     restore();
   });
 });
 
 describe('updateInvestmentPlan', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    autoSyncMock.syncNowWithAutoGist.mockReset();
+  });
+
   it('更新计划字段', async () => {
     const updateSpy = vi.spyOn(db.investmentPlans, 'update').mockResolvedValue(1);
 
     await updateInvestmentPlan(1, { active: false, amount: 200 });
 
     expect(updateSpy).toHaveBeenCalledWith(1, { active: false, amount: 200 });
+    expect(autoSyncMock.syncNowWithAutoGist).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('deleteInvestmentPlan', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    autoSyncMock.syncNowWithAutoGist.mockReset();
+  });
+
   it('删除计划', async () => {
     const deleteSpy = vi.spyOn(db.investmentPlans, 'delete').mockResolvedValue(undefined);
 
     await deleteInvestmentPlan(1);
 
     expect(deleteSpy).toHaveBeenCalledWith(1);
+    expect(autoSyncMock.syncNowWithAutoGist).toHaveBeenCalledTimes(1);
   });
 });
 

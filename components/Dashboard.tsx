@@ -28,6 +28,7 @@ import { fetchFundHoldings } from '../services/api';
 import { AccountManagerModal } from './AccountManagerModal';
 import { AddHoldingModal } from './AddHoldingModal';
 import { AdjustPositionModal } from './AdjustPositionModal';
+import { syncNowWithAutoGist } from '../services/gistAutoSync';
 import { RebalanceModal } from './RebalanceModal';
 import { TransactionHistoryModal } from './TransactionHistoryModal';
 import { SortDropdown } from './SortDropdown';
@@ -757,6 +758,7 @@ export const Dashboard: React.FC = () => {
   const handleDelete = async (fundId: number) => {
     if (confirm(t('common.delete') + '?')) {
       await db.funds.delete(fundId);
+      syncNowWithAutoGist();
     }
     setContextMenu(null);
   };

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Icons } from './Icon';
 import { ModalShell } from './ModalShell';
+import { syncNowWithAutoGist, withAutoGistSyncSuppressed } from '../services/gistAutoSync';
 import { useTranslation } from '../services/i18n';
 import { useSettings } from '../services/SettingsContext';
 import { recognizeHoldingsFromImage } from '../services/aiOcr';
@@ -250,61 +251,72 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose }) =
   };
 
   const handleImport = async () => {
-    const existingFunds = await db.funds.toArray();
-    const existingMap = new Map(existingFunds.map((f) => [f.code, f]));
-    const accounts = await db.accounts.toArray();
-    const fallbackAccountName =
-      accounts.find((acc) => acc.isDefault)?.name || accounts[0]?.name || 'Default';
+    let hasChanges = false;
+    await withAutoGistSyncSuppressed(async () => {
+      const existingFunds = await db.funds.toArray();
+      const existingMap = new Map(existingFunds.map((f) => [f.code, f]));
+      const accounts = await db.accounts.toArray();
+      const fallbackAccountName =
+        accounts.find((acc) => acc.isDefault)?.name || accounts[0]?.name || 'Default';
 
-    for (const item of reviewItems) {
-      const code = item.matchedCode;
-      const name = item.matchedName || item.name;
-      if (!code) continue;
+      for (const item of reviewItems) {
+        const code = item.matchedCode;
+        const name = item.matchedName || item.name;
+        if (!code) continue;
 
-      const decision = conflictMap[code];
-      const existing = existingMap.get(code);
-      if (existing && !decision) {
-        alert(t('common.pickConflict') || '请为重复基金选择保留或覆盖');
-        return;
+        const decision = conflictMap[code];
+        const existing = existingMap.get(code);
+        if (existing && !decision) {
+          alert(t('common.pickConflict') || '请为重复基金选择保留或覆盖');
+          return;
+        }
+        if (existing && decision === 'keep') continue;
+
+        const navJson = await fetchFundCommonData(code);
+        const currentNav = navJson?.data?.nav || 0;
+        const navDate = navJson?.data?.navDate || getLocalDateString();
+        const navChangePct = navJson?.data?.navChangePercent || 0;
+
+        const amount = item.amount || 0;
+        const shares = currentNav ? amount / currentNav : 0;
+        const holdingGain = item.holdingGain ?? undefined;
+        const totalCost = holdingGain !== undefined ? amount - holdingGain : amount;
+        const costPrice = shares > 0 ? totalCost / shares : currentNav || 0;
+
+        const mktVal = shares * currentNav;
+        const dayChangeVal =
+          item.dayGain ??
+          (navChangePct ? (mktVal * (navChangePct / 100)) / (1 + navChangePct / 100) : 0);
+
+        const payload: Fund = {
+          code,
+          name,
+          platform: existing?.platform || fallbackAccountName,
+          holdingShares: shares,
+          costPrice,
+          currentNav,
+          lastUpdate: navDate,
+          dayChangePct: navChangePct,
+          dayChangeVal,
+          buyDate: navDate,
+          buyTime: 'before15',
+          settlementDays: 1,
+        };
+
+        if (existing && decision === 'overwrite') {
+          await db.funds.put({ ...payload, id: existing.id });
+          hasChanges = true;
+        } else if (!existing) {
+          await db.funds.add(payload);
+          hasChanges = true;
+        }
       }
-      if (existing && decision === 'keep') continue;
 
-      const navJson = await fetchFundCommonData(code);
-      const currentNav = navJson?.data?.nav || 0;
-      const navDate = navJson?.data?.navDate || getLocalDateString();
-      const navChangePct = navJson?.data?.navChangePercent || 0;
+      return undefined;
+    });
 
-      const amount = item.amount || 0;
-      const shares = currentNav ? amount / currentNav : 0;
-      const holdingGain = item.holdingGain ?? undefined;
-      const totalCost = holdingGain !== undefined ? amount - holdingGain : amount;
-      const costPrice = shares > 0 ? totalCost / shares : currentNav || 0;
-
-      const mktVal = shares * currentNav;
-      const dayChangeVal =
-        item.dayGain ??
-        (navChangePct ? (mktVal * (navChangePct / 100)) / (1 + navChangePct / 100) : 0);
-
-      const payload: Fund = {
-        code,
-        name,
-        platform: existing?.platform || fallbackAccountName,
-        holdingShares: shares,
-        costPrice,
-        currentNav,
-        lastUpdate: navDate,
-        dayChangePct: navChangePct,
-        dayChangeVal,
-        buyDate: navDate,
-        buyTime: 'before15',
-        settlementDays: 1,
-      };
-
-      if (existing && decision === 'overwrite') {
-        await db.funds.put({ ...payload, id: existing.id });
-      } else if (!existing) {
-        await db.funds.add(payload);
-      }
+    if (hasChanges) {
+      syncNowWithAutoGist();
     }
 
     alert(t('common.importSuccessShort') || '导入完成');

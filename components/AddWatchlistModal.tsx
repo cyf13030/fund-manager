@@ -8,6 +8,7 @@ import { fetchHistoricalFundNav, fetchHistoricalIndexPrice } from '../services/a
 import { isValidIsoDate } from '../services/dateInput';
 import { pickWatchlistNameFromMorningstar } from '../services/watchlistName';
 import { ModalShell } from './ModalShell';
+import { syncNowWithAutoGist } from '../services/gistAutoSync';
 
 interface AddWatchlistModalProps {
   isOpen: boolean;
@@ -128,6 +129,7 @@ export const AddWatchlistModal: React.FC<AddWatchlistModalProps> = ({
           anchorPrice: price,
           anchorDate,
         });
+        syncNowWithAutoGist();
       } else {
         await db.watchlists.add({
           code,
@@ -139,6 +141,7 @@ export const AddWatchlistModal: React.FC<AddWatchlistModalProps> = ({
           dayChangePct: 0,
           lastUpdate: anchorDate,
         });
+        syncNowWithAutoGist();
       }
       handleClose();
     } catch (e) {

@@ -4,6 +4,7 @@ import { SelectDropdown } from './SelectDropdown';
 import { useTranslation } from '../services/i18n';
 import { useTheme } from '../services/ThemeContext';
 import { useSettings } from '../services/SettingsContext';
+import { updateAutoGistTargetSnapshot } from '../services/gistAutoSync';
 import {
   exportFunds,
   exportFundsToJsonString,
@@ -25,6 +26,7 @@ import {
 import { GistSyncChooserCard } from './GistSyncChooserCard';
 import { AnimatedSwitcher } from './transitions/AnimatedSwitcher';
 import { getConfiguredLlmProviders } from '../services/aiProviderConfig';
+import { withAutoGistSyncSuppressed } from '../services/gistAutoSync';
 
 interface SettingsPageProps {
   onBack?: () => void;
@@ -40,6 +42,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
   const {
     autoRefresh,
     setAutoRefresh,
+    autoGistSync,
+    setAutoGistSync,
     openaiApiKey,
     setOpenaiApiKey,
     setOpenaiModel,
@@ -241,12 +245,14 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
   };
 
   const saveDefaultTarget = (gist: GistListItem) => {
-    setDefaultGistTarget({
+    const target = {
       id: gist.id,
       description: gist.description,
       updatedAt: gist.updated_at,
       fileName: GIST_SYNC_FILENAME,
-    });
+    };
+    setDefaultGistTarget(target);
+    updateAutoGistTargetSnapshot(target);
   };
 
   const handleDownloadFromGist = async (gistId: string) => {
@@ -262,24 +268,26 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
 
     setSyncBusy(true);
     try {
-      const content = await downloadSyncGistContent({ token: githubToken, gistId });
-      const parsedContent = JSON.parse(content) as { investmentProfile?: unknown };
-      const importResult = await importFundsFromBackupContent(content, {
-        importMode: 'replaceAll',
+      await withAutoGistSyncSuppressed(async () => {
+        const content = await downloadSyncGistContent({ token: githubToken, gistId });
+        const parsedContent = JSON.parse(content) as { investmentProfile?: unknown };
+        const importResult = await importFundsFromBackupContent(content, {
+          importMode: 'replaceAll',
+        });
+        if (parsedContent.investmentProfile && typeof parsedContent.investmentProfile === 'object') {
+          setInvestmentProfile(parsedContent.investmentProfile);
+        }
+        const selected = target ?? syncGists.find((item) => item.id === gistId);
+        if (selected) {
+          saveDefaultTarget(selected);
+        }
+        const importSummary = (t('common.importSuccess') || '新增 {added} 条，跳过 {skipped} 条重复')
+          .replace('{added}', String(importResult.added))
+          .replace('{skipped}', String(importResult.skipped));
+        alert(`${t('common.gistSyncDownloadSuccess') || '已从 gist 下载并导入。'}\n${importSummary}`);
+        setGistChooserOpen(false);
+        await refreshSyncGists(githubToken);
       });
-      if (parsedContent.investmentProfile && typeof parsedContent.investmentProfile === 'object') {
-        setInvestmentProfile(parsedContent.investmentProfile);
-      }
-      const selected = target ?? syncGists.find((item) => item.id === gistId);
-      if (selected) {
-        saveDefaultTarget(selected);
-      }
-      const importSummary = (t('common.importSuccess') || '新增 {added} 条，跳过 {skipped} 条重复')
-        .replace('{added}', String(importResult.added))
-        .replace('{skipped}', String(importResult.skipped));
-      alert(`${t('common.gistSyncDownloadSuccess') || '已从 gist 下载并导入。'}\n${importSummary}`);
-      setGistChooserOpen(false);
-      await refreshSyncGists(githubToken);
     } catch (error) {
       alert(
         error instanceof GistClientError
@@ -925,6 +933,26 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
             <div className="mt-1 text-base font-semibold text-[var(--app-shell-ink)]">
               {t('common.githubToken') || 'GitHub Token'}
             </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-4 rounded-2xl border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-4 py-3">
+            <div>
+              <div className="text-sm font-semibold text-[var(--app-shell-ink)]">自动同步 Gist</div>
+              <div className="mt-1 text-xs text-[var(--app-shell-muted)]">
+                保存持仓、自选或投资画像后自动推送到默认 Gist。
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAutoGistSync(!autoGistSync)}
+              className={`relative h-7 w-12 rounded-full transition-colors ${autoGistSync ? 'bg-gray-900 dark:bg-blue-500/20' : 'bg-gray-200 dark:bg-white/10'}`}
+              aria-pressed={autoGistSync}
+              aria-label="自动同步 Gist"
+            >
+              <span
+                className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-transform ${autoGistSync ? 'translate-x-6' : 'translate-x-1'}`}
+              />
+            </button>
           </div>
 
           <div className="space-y-3">

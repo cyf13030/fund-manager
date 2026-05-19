@@ -1,6 +1,7 @@
 import { db, getSettlementDate } from './db';
 import { deductAvailableForBuy } from './assetAllocation';
 import type { InvestmentPlan, InvestmentFrequency, PendingTransaction } from '../types';
+import { syncNowWithAutoGist } from './gistAutoSync';
 
 const getLocalDateString = () => {
   const d = new Date();
@@ -42,18 +43,24 @@ export const shouldExecuteToday = (
 // === CRUD ===
 
 export const addInvestmentPlan = async (plan: Omit<InvestmentPlan, 'id' | 'createdAt'>) => {
-  return db.investmentPlans.add({
+  const result = await db.investmentPlans.add({
     ...plan,
     createdAt: getLocalDateString(),
   });
+  syncNowWithAutoGist();
+  return result;
 };
 
 export const updateInvestmentPlan = async (id: number, changes: Partial<InvestmentPlan>) => {
-  return db.investmentPlans.update(id, changes);
+  const result = await db.investmentPlans.update(id, changes);
+  syncNowWithAutoGist();
+  return result;
 };
 
 export const deleteInvestmentPlan = async (id: number) => {
-  return db.investmentPlans.delete(id);
+  const result = await db.investmentPlans.delete(id);
+  syncNowWithAutoGist();
+  return result;
 };
 
 export const getActiveInvestmentPlans = async () => {
@@ -116,6 +123,7 @@ export const executeInvestmentPlans = async (): Promise<void> => {
         deductAvailableForBuy(plan.amount);
 
         await db.investmentPlans.update(plan.id!, { lastExecutedDate: today });
+        syncNowWithAutoGist();
       }
     } catch (err) {
       console.error('定投计划执行失败', err);

@@ -34,6 +34,8 @@ export interface DefaultGistTargetSnapshot {
 interface SettingsContextValue {
   autoRefresh: boolean;
   setAutoRefresh: (val: boolean) => void;
+  autoGistSync: boolean;
+  setAutoGistSync: (val: boolean) => void;
   useUnifiedRefresh: boolean;
   setUseUnifiedRefresh: (val: boolean) => void;
   aiProvider: AiProvider;
@@ -132,6 +134,7 @@ const parseLlmProviders = (value: unknown): LlmProviderConfig[] => {
 
 const defaultSettings = {
   autoRefresh: false,
+  autoGistSync: false,
   useUnifiedRefresh: false,
   aiProvider: 'openai' as AiProvider,
   openaiApiKey: '',
@@ -255,6 +258,8 @@ const parseSavedSettings = (saved: string): typeof defaultSettings => {
   return {
     autoRefresh:
       typeof parsed.autoRefresh === 'boolean' ? parsed.autoRefresh : defaultSettings.autoRefresh,
+    autoGistSync:
+      typeof parsed.autoGistSync === 'boolean' ? parsed.autoGistSync : defaultSettings.autoGistSync,
     useUnifiedRefresh:
       typeof parsed.useUnifiedRefresh === 'boolean'
         ? parsed.useUnifiedRefresh
@@ -291,6 +296,8 @@ const parseSavedSettings = (saved: string): typeof defaultSettings => {
 const SettingsContext = createContext<SettingsContextValue>({
   autoRefresh: defaultSettings.autoRefresh,
   setAutoRefresh: () => {},
+  autoGistSync: defaultSettings.autoGistSync,
+  setAutoGistSync: () => {},
   useUnifiedRefresh: defaultSettings.useUnifiedRefresh,
   setUseUnifiedRefresh: () => {},
   aiProvider: defaultSettings.aiProvider,
@@ -350,6 +357,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const setAutoRefresh = (val: boolean) => updateSettings({ autoRefresh: val });
+  const setAutoGistSync = (val: boolean) => updateSettings({ autoGistSync: val });
   const setUseUnifiedRefresh = (val: boolean) => updateSettings({ useUnifiedRefresh: val });
   const setAiProvider = (val: AiProvider) => updateSettings({ aiProvider: val });
   const setOpenaiApiKey = (val: string) => updateSettings({ openaiApiKey: val });
@@ -433,6 +441,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       value={{
         autoRefresh: settings.autoRefresh,
         setAutoRefresh,
+        autoGistSync: settings.autoGistSync,
+        setAutoGistSync,
         useUnifiedRefresh: settings.useUnifiedRefresh,
         setUseUnifiedRefresh,
         aiProvider: settings.aiProvider,

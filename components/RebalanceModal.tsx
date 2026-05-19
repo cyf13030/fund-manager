@@ -7,6 +7,7 @@ import type { Fund, MorningstarFund, PendingTransaction } from '../types';
 import { Icons } from './Icon';
 import { SelectDropdown } from './SelectDropdown';
 import { ModalShell } from './ModalShell';
+import { syncNowWithAutoGist } from '../services/gistAutoSync';
 
 interface RebalanceModalProps {
   isOpen: boolean;
@@ -315,6 +316,8 @@ export const RebalanceModal: React.FC<RebalanceModalProps> = ({
         pendingTransactions: [...(freshTarget.pendingTransactions || []), targetTx],
       });
     });
+
+    syncNowWithAutoGist();
 
     handleClose();
   };

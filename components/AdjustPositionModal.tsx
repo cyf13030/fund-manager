@@ -7,6 +7,7 @@ import type { Fund, PendingTransaction } from '../types';
 import { parseSellInputToShares } from './adjustPositionUtils';
 import { ModalShell } from './ModalShell';
 import { deductAvailableForBuy, addAvailableForSell } from '../services/assetAllocation';
+import { syncNowWithAutoGist } from '../services/gistAutoSync';
 
 interface AdjustPositionModalProps {
   isOpen: boolean;
@@ -102,6 +103,7 @@ export const AdjustPositionModal: React.FC<AdjustPositionModalProps> = ({
       await db.funds.update(fund.id, {
         pendingTransactions: [...existingPending, newTx],
       });
+      syncNowWithAutoGist();
     }
 
     // 同步调整可用资产：加仓时扣减，减仓时增加

@@ -13,6 +13,7 @@ import type { MorningstarFund, Fund, WatchlistItem } from '../types';
 import { fetchFundCommonData } from '../services/api';
 import { isValidIsoDate } from '../services/dateInput';
 import { ModalShell } from './ModalShell';
+import { syncNowWithAutoGist } from '../services/gistAutoSync';
 
 interface AddHoldingModalProps {
   isOpen: boolean;
@@ -261,6 +262,8 @@ export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({
           settlementDays,
         });
 
+        syncNowWithAutoGist();
+
         onClose();
         return;
       }
@@ -287,6 +290,8 @@ export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({
         positionOpenAmount: isNaN(valAmount) ? undefined : valAmount,
         positionOpenDate: buyDate || undefined,
       });
+
+      syncNowWithAutoGist();
 
       onClose();
 

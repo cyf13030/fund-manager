@@ -4,6 +4,7 @@ import { db } from '../services/db';
 import { useTranslation } from '../services/i18n';
 import { Icons } from './Icon';
 import { ModalShell } from './ModalShell';
+import { syncNowWithAutoGist } from '../services/gistAutoSync';
 import type { Account } from '../types';
 
 interface AccountManagerModalProps {
@@ -29,6 +30,7 @@ export const AccountManagerModal: React.FC<AccountManagerModalProps> = ({ isOpen
     const normalized = normalizeAccountName(newAccountName);
     if (normalized) {
       await db.accounts.add({ name: normalized, isDefault: false });
+      syncNowWithAutoGist();
       setNewAccountName('');
       setIsAdding(false);
     }
@@ -36,9 +38,10 @@ export const AccountManagerModal: React.FC<AccountManagerModalProps> = ({ isOpen
 
   const handleDeleteAccount = async (id?: number) => {
     if (id) {
-      if (confirm(t('common.delete') + '?')) {
-        await db.accounts.delete(id);
-      }
+        if (confirm(t('common.delete') + '?')) {
+          await db.accounts.delete(id);
+          syncNowWithAutoGist();
+        }
     }
   };
 
@@ -70,6 +73,8 @@ export const AccountManagerModal: React.FC<AccountManagerModalProps> = ({ isOpen
       // Cascading update: find funds with old platform name and update to new name
       await db.funds.where('platform').equals(oldName).modify({ platform: newName });
     });
+
+    syncNowWithAutoGist();
 
     handleCancelEdit();
   };
