@@ -2,7 +2,7 @@
 
 本地优先、隐私至上的基金管理应用，帮助用户聚合管理基金持仓、查看收益分析。
 
-[Github Pages 在线演示](https://gp.hrfuqiang.top/fund-manager/)
+[GitHub Pages 在线演示](https://cyf13030.github.io/fund-manager/)
 
 <details>
 <summary>桌面端界面展示</summary>
@@ -213,7 +213,7 @@ npm run preview
 
 ### iOS（Safari）
 
-1. 用 **Safari** 打开 `https://gp.hrfuqiang.top/fund-manager/`
+1. 用 **Safari** 打开 `https://cyf13030.github.io/fund-manager/`
 2. 点击底部工具栏中间的 **分享** 按钮（方框箭头图标）
 3. 在分享菜单中滑动找到 **「添加到主屏幕」**（Add to Home Screen）
 4. 确认应用名称后点击右上角 **「添加」**
@@ -223,7 +223,7 @@ npm run preview
 
 ### Android（Chrome / Edge）
 
-1. 用 Chrome 或 Edge 打开 `https://gp.hrfuqiang.top/fund-manager/`
+1. 用 Chrome 或 Edge 打开 `https://cyf13030.github.io/fund-manager/`
 2. 点击地址栏右侧或底部菜单中的 **⋮** → **「添加到主屏幕」** 或 **「安装应用」**
 3. 按提示确认即可
 
