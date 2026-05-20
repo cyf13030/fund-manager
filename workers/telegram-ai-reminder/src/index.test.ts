@@ -376,12 +376,16 @@ describe('telegram ai reminder worker', () => {
     expect(response.status).toBe(200);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/chat/completions'))).toBe(false);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('morningstar.cn'))).toBe(false);
-    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
-    const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    expect(telegramCalls[0]?.[1].body).toContain('正在结合市场情绪');
+    const telegramBody = JSON.parse(telegramCalls.at(-1)?.[1].body as string) as { text: string };
     expect(telegramBody.text).toContain('养基AI量化分析');
     expect(telegramBody.text).toContain('组合量化信号');
-    expect(telegramBody.text).toContain('估值因子暂缺');
+    expect(telegramBody.text).toContain('估值');
+    expect(telegramBody.text).toContain('强势持有');
+    expect(telegramBody.text).toContain('MA20');
     expect(telegramBody.text).toContain('测试基金A');
+    expect(telegramBody.text).toContain('历史位置');
   });
 
   it('量化分析会分页读取历史净值且样本够 21 条时输出部分信号', async () => {
@@ -425,12 +429,104 @@ describe('telegram ai reminder worker', () => {
 
     expect(response.status).toBe(200);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('page=2'))).toBe(true);
-    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
-    const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls.at(-1)?.[1].body as string) as { text: string };
     expect(telegramBody.text).toContain('覆盖：1/1 只');
     expect(telegramBody.text).toContain('部分样本基金C');
     expect(telegramBody.text).toContain('20日');
     expect(telegramBody.text).not.toContain('历史净值样本少于 21 条');
+  });
+
+  it('量化分析组合评分只按有量化数据的资产加权', async () => {
+    const payload = {
+      ...backupPayload,
+      funds: [
+        { ...backupPayload.funds[0], code: '000005', name: '强势样本基金' },
+        {
+          ...backupPayload.funds[0],
+          code: '000006',
+          name: '无数据大仓位基金',
+          holdingShares: 10000,
+          currentNav: 10,
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(payload) } } }),
+        );
+      }
+      if (url.includes('code=000005')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
+      if (url.includes('fundf10.eastmoney.com')) {
+        return Promise.resolve(new Response('var apidata={content:"<table></table>"};'));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '量化分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls.at(-1)?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('组合量化信号：偏积极');
+    expect(telegramBody.text).toContain('覆盖：1/2 只');
+    expect(telegramBody.text).toContain('资产覆盖 +0.12%');
+    expect(telegramBody.text).toContain('强势持有');
+    expect(telegramBody.text).toContain('数据不足');
+    expect(telegramBody.text).toContain('无数据大仓位基金');
+    expect(telegramBody.text).toContain('历史净值位置估值 proxy');
+  });
+
+  it('量化分析会为 ETF 联接基金显示母 ETF 基准', async () => {
+    const payload = {
+      ...backupPayload,
+      funds: [
+        {
+          ...backupPayload.funds[0],
+          code: '015310',
+          name: '华泰柏瑞南方东英恒生科技ETF联接(QDII)A',
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(payload) } } }),
+        );
+      }
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
+      if (url.includes('qt.gtimg.cn') && url.includes('sh513180')) {
+        return Promise.resolve(new Response('v_s_sh513180="1~恒生科技ETF~513180~1.00~0.00~1.23";'));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '量化分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls.at(-1)?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('ETF_LINK/HK');
+    expect(telegramBody.text).toContain('基准: 华泰柏瑞南方东英恒生科技ETF +1.23%');
   });
 
   it('配置 CRON_SECRET 后拒绝未授权手动触发', async () => {
@@ -718,6 +814,32 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('结论、加仓、减仓/清仓、建仓主题、风险、数据');
     expect(aiBody.messages[1].content).toContain('风险只列 1-2 个最大风险');
     expect(aiBody.messages[1].content).toContain('数据行简要标注市场、资金流、新闻、量化、底层持仓');
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
+  });
+
+  it('Telegram 发送“市场分析”会触发独立市场分析问题', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '市场分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls[1]?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('养基AI市场分析');
+    const aiBody = findAiRequestBody(fetchMock);
+    expect(aiBody.messages[1].content).toContain('请只做市场分析');
+    expect(aiBody.messages[1].content).toContain('A 股市场环境、主要指数强弱');
+    expect(aiBody.messages[1].content).toContain('市场情绪、指数强弱、资金流方向、消息面影响、持仓影响、今日观察主题、风险提示');
+    expect(aiBody.messages[1].content).toContain('不推荐具体基金名称或基金代码');
+    expect(aiBody.messages[1].content).not.toContain('简短但全面');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
 

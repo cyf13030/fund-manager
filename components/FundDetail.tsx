@@ -26,6 +26,8 @@ import { formatPct, getSignColor, formatSignedCurrency } from '../services/finan
 import { useTranslation } from '../services/i18n';
 import { useTheme } from '../services/ThemeContext';
 import { ModalShell } from './ModalShell';
+import { getFundDailyEarnings } from '../services/fundDailyEarnings';
+import { getFundValuationSeries } from '../services/fundValuationTimeseries';
 import {
   buildTencentQuoteCodes,
   buildUSQuoteCodes,
@@ -400,6 +402,8 @@ export const FundDetail: React.FC<FundDetailProps> = ({
   >({});
   const [intradayData, setIntradayData] = useState<Record<string, IntradayPoint[]>>({});
   const [parentIntradayData, setParentIntradayData] = useState<Record<string, IntradayPoint[]>>({});
+  const [valuationSeries, setValuationSeries] = useState(() => getFundValuationSeries(fund.code));
+  const [dailyEarnings, setDailyEarnings] = useState(() => getFundDailyEarnings(fund.code));
 
   // Intraday fund-level trend
   const [isMarketTrading, setIsMarketTrading] = useState(false);
@@ -510,6 +514,29 @@ export const FundDetail: React.FC<FundDetailProps> = ({
     };
 
     fetchPerformance();
+  }, [fund.code]);
+
+  useEffect(() => {
+    setValuationSeries(getFundValuationSeries(fund.code));
+    setDailyEarnings(getFundDailyEarnings(fund.code));
+  }, [fund.code]);
+
+  useEffect(() => {
+    const syncLocalSeries = () => {
+      setValuationSeries(getFundValuationSeries(fund.code));
+      setDailyEarnings(getFundDailyEarnings(fund.code));
+    };
+
+    syncLocalSeries();
+    const intervalId = window.setInterval(syncLocalSeries, 10000);
+    window.addEventListener('focus', syncLocalSeries);
+    window.addEventListener('storage', syncLocalSeries);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', syncLocalSeries);
+      window.removeEventListener('storage', syncLocalSeries);
+    };
   }, [fund.code]);
 
   // 4. Fetch Chart Data (Growth Data)
@@ -884,6 +911,10 @@ export const FundDetail: React.FC<FundDetailProps> = ({
     currentNav,
     stockPrevCloseMap,
   ]);
+
+  const recentValuationSeries = useMemo(() => valuationSeries.slice(-12), [valuationSeries]);
+
+  const recentDailyEarnings = useMemo(() => [...dailyEarnings].slice(-7).reverse(), [dailyEarnings]);
 
   // Initialize and Update ECharts
   useEffect(() => {
@@ -1458,6 +1489,75 @@ export const FundDetail: React.FC<FundDetailProps> = ({
             </div>
           </div>
         )}
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="border border-[var(--app-shell-line)] bg-[var(--app-shell-panel)]/92 p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)] transition-colors">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="border-l-4 border-sky-500 pl-2 text-sm font-bold text-gray-800 dark:text-gray-100">
+                盘中估值记录
+              </h3>
+              <span className="text-xs text-[var(--app-shell-muted)]">
+                {valuationSeries.length > 0 ? `${valuationSeries.length} 点` : '暂无'}
+              </span>
+            </div>
+
+            {recentValuationSeries.length > 0 ? (
+              <div className="space-y-2">
+                {recentValuationSeries.map((point) => (
+                  <div
+                    key={`${point.date}-${point.time}`}
+                    className="flex items-center justify-between rounded-lg bg-[var(--app-shell-panel-strong)]/70 px-3 py-2 text-xs"
+                  >
+                    <span className="text-[var(--app-shell-muted)]">
+                      {point.date.slice(5)} {point.time}
+                    </span>
+                    <span className="font-sans font-semibold text-[var(--app-shell-ink)]">
+                      {point.estimatedNav.toFixed(4)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg bg-[var(--app-shell-panel-strong)]/70 px-3 py-4 text-center text-xs text-[var(--app-shell-muted)]">
+                刷新并生成盘中估值后，这里会保留当天分时点。
+              </div>
+            )}
+          </div>
+
+          <div className="border border-[var(--app-shell-line)] bg-[var(--app-shell-panel)]/92 p-4 shadow-[0_10px_24px_rgba(15,23,42,0.05)] transition-colors">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="border-l-4 border-amber-500 pl-2 text-sm font-bold text-gray-800 dark:text-gray-100">
+                每日收益记录
+              </h3>
+              <span className="text-xs text-[var(--app-shell-muted)]">
+                {dailyEarnings.length > 0 ? `${dailyEarnings.length} 天` : '暂无'}
+              </span>
+            </div>
+
+            {recentDailyEarnings.length > 0 ? (
+              <div className="space-y-2">
+                {recentDailyEarnings.map((point) => (
+                  <div
+                    key={point.date}
+                    className="grid grid-cols-[1fr_auto_auto] items-center gap-3 rounded-lg bg-[var(--app-shell-panel-strong)]/70 px-3 py-2 text-xs"
+                  >
+                    <span className="text-[var(--app-shell-muted)]">{point.date.slice(5)}</span>
+                    <span className={`font-sans font-semibold ${getSignColor(point.earnings)}`}>
+                      {formatSignedCurrency(point.earnings)}
+                    </span>
+                    <span className={`font-sans ${getSignColor(point.rate ?? 0)}`}>
+                      {point.rate == null ? '--' : formatPct(point.rate)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg bg-[var(--app-shell-panel-strong)]/70 px-3 py-4 text-center text-xs text-[var(--app-shell-muted)]">
+                刷新持仓后，这里会按日期归档该基金每日收益。
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Historical Data Grid (Performance Summary) */}
         {pingzhongData ? (

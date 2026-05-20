@@ -37,6 +37,7 @@ import type { Fund } from '../types';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSettings } from '../services/SettingsContext';
 import { InvestmentPlanModal } from './InvestmentPlanModal';
+import { MyEarningsModal } from './MyEarningsModal';
 
 const FundDetail = lazy(() => import('./FundDetail').then((m) => ({ default: m.FundDetail })));
 const AiHoldingsAnalysisModal = lazy(() =>
@@ -211,6 +212,7 @@ export const Dashboard: React.FC = () => {
 
   const [isAccountManagerOpen, setIsAccountManagerOpen] = useState(false);
   const [isAddFundOpen, setIsAddFundOpen] = useState(false);
+  const [isMyEarningsOpen, setIsMyEarningsOpen] = useState(false);
   const [editingFund, setEditingFund] = useState<Fund | undefined>(undefined);
   const [adjustFund, setAdjustFund] = useState<Fund | null>(null);
   const [rebalanceFund, setRebalanceFund] = useState<Fund | null>(null);
@@ -947,6 +949,13 @@ export const Dashboard: React.FC = () => {
               <div className="hidden rounded-full border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-3 py-1.5 text-[11px] font-medium tracking-[0.18em] text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-gray-400 md:flex">
                 {sortedFunds.length} {t('common.fund')}
               </div>
+              <button
+                type="button"
+                onClick={() => setIsMyEarningsOpen(true)}
+                className="rounded-full border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-3 py-2 text-xs font-semibold text-[var(--app-shell-ink)] transition-colors hover:border-[var(--app-shell-line-strong)] hover:bg-[var(--app-shell-panel)]"
+              >
+                我的收益
+              </button>
               <button
                 onClick={() => setIsAccountManagerOpen(true)}
                 className="rounded-full border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] p-2.5 text-slate-500 transition-colors hover:border-[var(--app-shell-line-strong)] hover:text-slate-800 dark:border-white/10 dark:bg-white/5 dark:text-gray-400 dark:hover:border-white/20 dark:hover:text-gray-100"
@@ -1779,6 +1788,7 @@ export const Dashboard: React.FC = () => {
         isOpen={isAccountManagerOpen}
         onClose={() => setIsAccountManagerOpen(false)}
       />
+      <MyEarningsModal isOpen={isMyEarningsOpen} onClose={() => setIsMyEarningsOpen(false)} funds={safeFunds} />
       <AddHoldingModal
         isOpen={isAddFundOpen}
         onClose={() => setIsAddFundOpen(false)}

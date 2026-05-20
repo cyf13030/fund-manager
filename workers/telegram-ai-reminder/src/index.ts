@@ -1,6 +1,10 @@
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha2.js';
 
+import { fetchFundTrackingInfo, fetchGeneralTencentQuotes, fetchParentETFPct, fetchParentETFInfo } from '../../../services/api';
+import { identifyFundType } from '../../../services/fundTypeIdentifier';
+import type { FundCategory, UnderlyingMarket } from '../../../types';
+
 ed.hashes.sha512 = (...messages) => sha512(ed.etc.concatBytes(...messages));
 
 interface Env {
@@ -136,17 +140,38 @@ interface FundQuantSignalSnapshot {
   dataStatus: 'available' | 'insufficient' | 'failed';
   score: number;
   signal: '积极' | '偏积极' | '观望' | '偏谨慎' | '谨慎';
+  fundCategory: FundCategory;
+  underlyingMarket: UnderlyingMarket;
   momentumScore?: number;
   riskScore?: number;
+  trendScore?: number;
   valuationScore?: number;
-  valuationStatus: 'missing';
+  valuationStatus: 'proxy' | 'missing';
+  valuationPositionPct?: number;
   return20d?: number;
   return60d?: number;
   return120d?: number;
+  ma20?: number;
+  ma60?: number;
+  distanceToMa20Pct?: number;
+  distanceToMa60Pct?: number;
+  trendStatus?: 'strong' | 'neutral' | 'weak' | 'insufficient';
   volatility60d?: number;
   maxDrawdown120d?: number;
   sampleSize: number;
   reason: string;
+}
+
+interface QuantThresholdProfile {
+  strong: number;
+  weak: number;
+}
+
+interface QuantBenchmarkSnapshot {
+  name: string;
+  code?: string;
+  source: 'parentEtf' | 'trackingInfo';
+  changePct?: number | null;
 }
 
 interface FundHoldingsEnrichmentSnapshot {
@@ -405,6 +430,8 @@ const DEFAULT_AI_QUESTION =
   '请基于当前持仓、A 股市场指数、市场情绪、中文财经新闻和投资画像，重点判断当前是否适合加仓、是否需要减仓、是否达到清仓条件。请给出明确但条件化的结论、依据、触发条件和观察点；收盘后才写明日观察点，收盘前写今日观察点。';
 const SHORT_ANALYSIS_QUESTION =
   '请输出简短但全面的 Telegram/QQ 短版分析，控制在 500 字以内，最多 6 行或 6 个短段，不展开长篇推理，不解释计算过程。必须按固定结构输出：结论、加仓、减仓/清仓、建仓主题、风险、数据。结论先用一句话说明当前是否适合追涨或加仓。加仓只能从当前已持有基金中判断；如果没有合适候选，写“今日暂无适合加仓的基金”。建仓主题只推荐主题方向，不输出具体基金名称或基金代码；如果没有明确主题，写“今日暂无明确建仓主题，仅做观察”。风险只列 1-2 个最大风险。数据行简要标注市场、资金流、新闻、量化、底层持仓是否可用和数据时间；缺失数据必须说明，不得编造。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
+const MARKET_ANALYSIS_QUESTION =
+  '请只做市场分析，控制在 1000 字以内。重点分析 A 股市场环境、主要指数强弱、中文财经新闻、行业/概念资金流方向，以及这些信息对当前持仓的潜在影响。建仓部分只输出主题观察方向，不推荐具体基金名称或基金代码。若市场数据、新闻或资金流缺失，必须明确说明数据缺失，不得编造。请按“市场情绪、指数强弱、资金流方向、消息面影响、持仓影响、今日观察主题、风险提示”输出。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
 const DETAILED_ANALYSIS_QUESTION = DEFAULT_AI_QUESTION;
 const MIDDAY_ANALYSIS_QUESTION =
   '请输出午盘休息分析，控制在 1000 字以内。重点总结上午市场情绪、A 股指数强弱、资金流入最强方向、中文财经新闻利好/风险，并判断下午是否适合观察、低吸、小额试探或暂不操作。建仓主题观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合。如果没有明确主题，必须输出“午盘建仓主题观察”，给出 1-3 个下午观察方向和触发条件，不得硬写买入建议。午盘不做激进操作建议，不要建议清仓。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
@@ -432,9 +459,9 @@ const SCHEDULED_ANALYSIS_CONFIG: Record<
     maxLength: 1600,
   },
 };
-const COMMAND_QUESTION_MAP: Record<string, { question: string; maxLength?: number }> = {
+const COMMAND_QUESTION_MAP: Record<string, { question: string; maxLength?: number; title?: string }> = {
   分析: { question: SHORT_ANALYSIS_QUESTION, maxLength: 900 },
-  市场分析: { question: SHORT_ANALYSIS_QUESTION, maxLength: 900 },
+  市场分析: { question: MARKET_ANALYSIS_QUESTION, maxLength: 1200, title: '养基AI市场分析' },
   详细分析: { question: DETAILED_ANALYSIS_QUESTION },
   加仓: {
     question:
@@ -463,12 +490,16 @@ const INTRADAY_PROFIT_COMMANDS = ['今日盘中实时收益', '盘中实时收�
 const DETAILED_INTRADAY_PROFIT_COMMANDS = ['详细盘中收益', '详细实时收益'];
 const QUANT_ANALYSIS_COMMANDS = ['量化分析', '量化信号', '基金量化'];
 const TELEGRAM_HELP_TEXT =
-  '发送“分析”获取短版判断；发送“量化分析”获取客观量化信号；发送“详细分析”获取完整分析；也可发送“建仓”“加仓”“减仓”“清仓”获取专项判断。';
+  '发送“分析”获取短版判断；发送“市场分析”获取市场环境判断；发送“量化分析”获取客观量化信号；发送“详细分析”获取完整分析；也可发送“建仓”“加仓”“减仓”“清仓”获取专项判断。';
 const TELEGRAM_ANALYSIS_PENDING_TEXT = '收到，正在结合市场情绪、资金流和持仓分析...';
 const QUANT_SIGNAL_CACHE_TTL_MS = 60 * 60 * 1000;
 const QUANT_NAV_PAGE_SIZE = 20;
-const QUANT_NAV_TARGET_SIZE = 140;
-const QUANT_NAV_MAX_PAGES = 8;
+const QUANT_NAV_TARGET_SIZE = 80;
+const QUANT_NAV_MAX_PAGES = 4;
+const QUANT_NAV_REQUEST_TIMEOUT_MS = 2500;
+const QUANT_FUND_TIMEOUT_MS = 9000;
+const QUANT_BENCHMARK_TIMEOUT_MS = 2000;
+const QUANT_CONCURRENCY = 4;
 const quantSignalCache = new Map<string, { expiresAt: number; signal: FundQuantSignalSnapshot }>();
 const fundHoldingsCache = new Map<string, { expiresAt: number; enrichment: FundHoldingsEnrichmentSnapshot }>();
 const DEFAULT_MARKET_INDEX_CODES = [
@@ -646,6 +677,49 @@ const fetchJsonWithTimeout = async <T>(
 ): Promise<T> => {
   const text = await fetchTextWithTimeout(url, init, label, timeoutMs);
   return JSON.parse(text) as T;
+};
+
+const withFallbackTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+  label: string,
+): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timeoutId = setTimeout(() => {
+      console.warn(`${label} 超时 ${timeoutMs}ms，使用降级结果`);
+      resolve(fallback);
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
+
+const mapWithConcurrency = async <T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> => {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+      }
+    }),
+  );
+
+  return results;
 };
 
 const logStepDuration = (label: string, startedAt: number) => {
@@ -938,10 +1012,11 @@ const fetchFundHistoricalNavForQuant = async (fundCode: string): Promise<FundHis
 
   try {
     for (let page = 1; page <= QUANT_NAV_MAX_PAGES && navs.length < QUANT_NAV_TARGET_SIZE; page += 1) {
-      const text = await fetchText(
+      const text = await fetchTextWithTimeout(
         `https://fundf10.eastmoney.com/F10DataApi.aspx?type=lsjz&code=${fundCode}&page=${page}&per=${QUANT_NAV_PAGE_SIZE}&rt=${Date.now()}`,
         { headers: { Accept: '*/*' } },
         `读取基金 ${fundCode} 历史净值第 ${page} 页`,
+        QUANT_NAV_REQUEST_TIMEOUT_MS,
       );
       const rows = parseEastMoneyHistoricalNavRows(text);
       if (rows.length === 0) break;
@@ -965,6 +1040,12 @@ const calculatePeriodReturnPct = (navs: FundHistoricalNavPoint[], days: number) 
   const base = navs[days];
   if (!latest || !base || base.nav <= 0) return undefined;
   return round(((latest.nav / base.nav) - 1) * 100);
+};
+
+const calculateMovingAverage = (navs: FundHistoricalNavPoint[], days: number) => {
+  const window = navs.slice(0, days);
+  if (window.length < days) return undefined;
+  return round(window.reduce((sum, point) => sum + point.nav, 0) / window.length);
 };
 
 const calculateAnnualizedVolatilityPct = (navs: FundHistoricalNavPoint[], days: number) => {
@@ -1020,6 +1101,153 @@ const scoreRisk = (volatility60d?: number, maxDrawdown120d?: number) => {
   return round(clamp(score, -2, 2));
 };
 
+const scoreTrend = (latestNav?: number, ma20?: number, ma60?: number) => {
+  if (!latestNav || !ma20) return 0;
+
+  let score = latestNav >= ma20 ? 0.5 : -0.5;
+  if (ma60 !== undefined) {
+    if (ma20 >= ma60 && latestNav >= ma60) score += 0.7;
+    else if (ma20 < ma60 && latestNav < ma60) score -= 0.7;
+  }
+
+  return round(clamp(score, -2, 2));
+};
+
+const resolveQuantThresholdProfile = (fundCategory: FundCategory, underlyingMarket: UnderlyingMarket): QuantThresholdProfile => {
+  if (fundCategory === 'ETF_LINK') {
+    return { strong: 0.9, weak: -0.9 };
+  }
+
+  if (fundCategory === 'QDII' || fundCategory === 'HK' || underlyingMarket === 'US' || underlyingMarket === 'HK') {
+    return { strong: 0.8, weak: -0.8 };
+  }
+
+  if (fundCategory === 'ETF') {
+    return { strong: 1, weak: -1 };
+  }
+
+  return { strong: 1.2, weak: -1.2 };
+};
+
+const getQuantSignalLabelForProfile = (
+  score: number,
+  profile: QuantThresholdProfile,
+): FundQuantSignalSnapshot['signal'] => {
+  if (score >= profile.strong) return '积极';
+  if (score >= profile.strong * 0.4) return '偏积极';
+  if (score <= profile.weak) return '谨慎';
+  if (score <= profile.weak * 0.4) return '偏谨慎';
+  return '观望';
+};
+
+const getQuantGroupLabelForProfile = (signal: FundQuantSignalSnapshot, profile: QuantThresholdProfile) => {
+  if (signal.dataStatus !== 'available') return '数据不足';
+  if (signal.score >= profile.strong * 0.4) return '强势持有';
+  if (signal.score <= profile.weak * 0.4) return '风险升高';
+  return '中性观察';
+};
+
+const normalizeTrackingIndexCode = (indexCode: string) => {
+  const normalized = indexCode.trim().toLowerCase();
+  if (/^(sh|sz)\d{6}$/.test(normalized)) return normalized;
+  const exchangeMatch = indexCode.trim().toUpperCase().match(/^(\d{6})\.(SH|SZ)$/);
+  if (!exchangeMatch) return null;
+  return `${exchangeMatch[2].toLowerCase()}${exchangeMatch[1]}`;
+};
+
+const resolveQuantBenchmark = async (
+  fundCode: string,
+  fundName: string,
+  fundCategory: FundCategory,
+): Promise<QuantBenchmarkSnapshot | null> => {
+  if (fundCategory === 'ETF_LINK') {
+    try {
+      const parentInfo = await fetchParentETFInfo(fundCode, fundName);
+      if (!parentInfo.parentCode) return null;
+      const changePct = await fetchParentETFPct(parentInfo);
+      return {
+        name: parentInfo.parentName,
+        code: parentInfo.parentCode,
+        source: 'parentEtf',
+        changePct,
+      };
+    } catch (error) {
+      console.warn(`读取 ETF 联接母 ETF 失败 ${fundCode}`, error);
+      return null;
+    }
+  }
+
+  if (fundCategory === 'DOMESTIC' || fundCategory === 'UNKNOWN') return null;
+
+  try {
+    const trackingInfo = await fetchFundTrackingInfo(fundCode, fundName);
+    if (!trackingInfo) return null;
+
+    const normalizedCode = normalizeTrackingIndexCode(trackingInfo.indexCode);
+    if (!normalizedCode) {
+      return { name: trackingInfo.indexName, code: trackingInfo.indexCode, source: 'trackingInfo' };
+    }
+
+    const quoteMap = await fetchGeneralTencentQuotes([normalizedCode]);
+    const quote = quoteMap[normalizedCode];
+    return {
+      name: trackingInfo.indexName,
+      code: normalizedCode,
+      source: 'trackingInfo',
+      changePct: quote?.changePct ?? null,
+    };
+  } catch (error) {
+    console.warn(`读取基金 ${fundCode} 估值基准失败`, error);
+    return null;
+  }
+};
+
+const scoreValuation = (latestNav?: number, navs?: FundHistoricalNavPoint[]) => {
+  if (!latestNav || !navs || navs.length < 21) {
+    return {
+      valuationScore: undefined,
+      valuationStatus: 'missing' as const,
+      valuationPositionPct: undefined,
+    };
+  }
+
+  const window = navs.slice(0, Math.min(120, navs.length));
+  const values = window.map((point) => point.nav).filter((value) => Number.isFinite(value) && value > 0);
+  if (values.length < 21) {
+    return {
+      valuationScore: undefined,
+      valuationStatus: 'missing' as const,
+      valuationPositionPct: undefined,
+    };
+  }
+
+  const minNav = Math.min(...values);
+  const maxNav = Math.max(...values);
+  if (maxNav <= minNav) {
+    return {
+      valuationScore: 0,
+      valuationStatus: 'proxy' as const,
+      valuationPositionPct: 50,
+    };
+  }
+
+  const positionPct = round(((latestNav - minNav) / (maxNav - minNav)) * 100);
+  const valuationScore = round(clamp(((50 - positionPct) / 25) * 1, -2, 2));
+
+  return {
+    valuationScore,
+    valuationStatus: 'proxy' as const,
+    valuationPositionPct: positionPct,
+  };
+};
+
+const getTrendStatus = (trendScore?: number): FundQuantSignalSnapshot['trendStatus'] => {
+  if (trendScore === undefined) return 'insufficient';
+  if (trendScore >= 0.8) return 'strong';
+  if (trendScore <= -0.8) return 'weak';
+  return 'neutral';
+};
+
 const getQuantSignalLabel = (score: number): FundQuantSignalSnapshot['signal'] => {
   if (score >= 1.2) return '积极';
   if (score >= 0.4) return '偏积极';
@@ -1028,12 +1256,19 @@ const getQuantSignalLabel = (score: number): FundQuantSignalSnapshot['signal'] =
   return '观望';
 };
 
-const buildFundQuantSignal = (navs: FundHistoricalNavPoint[]): FundQuantSignalSnapshot => {
+const buildFundQuantSignal = (
+  navs: FundHistoricalNavPoint[],
+  fundCategory: FundCategory,
+  underlyingMarket: UnderlyingMarket,
+): FundQuantSignalSnapshot => {
+  const thresholdProfile = resolveQuantThresholdProfile(fundCategory, underlyingMarket);
   if (navs.length < 21) {
     return {
       dataStatus: navs.length === 0 ? 'failed' : 'insufficient',
       score: 0,
       signal: '观望',
+      fundCategory,
+      underlyingMarket,
       valuationStatus: 'missing',
       sampleSize: navs.length,
       reason: '历史净值样本少于 21 条，暂不生成量化加减仓信号',
@@ -1043,36 +1278,58 @@ const buildFundQuantSignal = (navs: FundHistoricalNavPoint[]): FundQuantSignalSn
   const return20d = calculatePeriodReturnPct(navs, 20);
   const return60d = calculatePeriodReturnPct(navs, 60);
   const return120d = calculatePeriodReturnPct(navs, 120);
+  const ma20 = calculateMovingAverage(navs, 20);
+  const ma60 = calculateMovingAverage(navs, 60);
+  const latestNav = navs[0]?.nav;
+  const distanceToMa20Pct = latestNav && ma20 ? round((latestNav / ma20 - 1) * 100) : undefined;
+  const distanceToMa60Pct = latestNav && ma60 ? round((latestNav / ma60 - 1) * 100) : undefined;
   const volatility60d = navs.length >= 61 ? calculateAnnualizedVolatilityPct(navs, 60) : undefined;
   const maxDrawdown120d = calculateMaxDrawdownPct(navs, Math.min(120, navs.length));
   const momentumScore = scoreMomentum(return20d, return60d, return120d);
   const riskScore = scoreRisk(volatility60d, maxDrawdown120d);
-  const score = round(momentumScore * 0.6 + riskScore * 0.4);
+  const trendScore = scoreTrend(latestNav, ma20, ma60);
+  const valuation = scoreValuation(latestNav, navs);
+  const score = round(momentumScore * 0.4 + riskScore * 0.25 + trendScore * 0.2 + (valuation.valuationScore ?? 0) * 0.15);
 
   return {
     dataStatus: 'available',
     score,
-    signal: getQuantSignalLabel(score),
+    signal: getQuantSignalLabelForProfile(score, thresholdProfile),
+    fundCategory,
+    underlyingMarket,
     momentumScore,
     riskScore,
-    valuationStatus: 'missing',
+    trendScore,
+    valuationScore: valuation.valuationScore,
+    valuationStatus: valuation.valuationStatus,
+    valuationPositionPct: valuation.valuationPositionPct,
     return20d,
     return60d,
     return120d,
+    ma20,
+    ma60,
+    distanceToMa20Pct,
+    distanceToMa60Pct,
+    trendStatus: getTrendStatus(trendScore),
     volatility60d,
     maxDrawdown120d,
     sampleSize: navs.length,
     reason:
       navs.length >= 121
-        ? '基于基金历史净值计算动量、波动率和最大回撤；估值因子缺失，未纳入评分'
-        : '历史净值样本不足 121 条，已生成部分量化信号；估值因子缺失，未纳入评分',
+        ? '基于基金历史净值计算动量、波动率、最大回撤和历史净值位置估值因子；估值仅为 proxy，不代表真实 PE/PB'
+        : '历史净值样本不足 121 条，已生成部分量化信号；估值仅为历史净值位置 proxy，不代表真实 PE/PB',
   };
 };
 
-const buildCachedOnlyQuantSignal = (): FundQuantSignalSnapshot => ({
+const buildCachedOnlyQuantSignal = (
+  fundCategory: FundCategory,
+  underlyingMarket: UnderlyingMarket,
+): FundQuantSignalSnapshot => ({
   dataStatus: 'insufficient',
   score: 0,
   signal: '观望',
+  fundCategory,
+  underlyingMarket,
   valuationStatus: 'missing',
   sampleSize: 0,
   reason: '快速分析未现场拉取历史净值，发送“量化分析”可获取完整量化信号',
@@ -1080,14 +1337,21 @@ const buildCachedOnlyQuantSignal = (): FundQuantSignalSnapshot => ({
 
 const getFundQuantSignal = async (
   fundCode: string,
-  options?: { cachedOnly?: boolean },
+  options?: { cachedOnly?: boolean; fundName?: string },
 ): Promise<FundQuantSignalSnapshot> => {
   const cached = quantSignalCache.get(fundCode);
   if (cached && cached.expiresAt > Date.now()) return cached.signal;
-  if (options?.cachedOnly) return buildCachedOnlyQuantSignal();
+  const { category, underlyingMarket } = identifyFundType({ code: fundCode, name: options?.fundName });
+  if (options?.cachedOnly) return buildCachedOnlyQuantSignal(category, underlyingMarket);
 
-  const historicalNavs = await fetchFundHistoricalNavForQuant(fundCode);
-  const signal = buildFundQuantSignal(historicalNavs);
+  const signal = await withFallbackTimeout(
+    fetchFundHistoricalNavForQuant(fundCode).then((historicalNavs) =>
+      buildFundQuantSignal(historicalNavs, category, underlyingMarket),
+    ),
+    QUANT_FUND_TIMEOUT_MS,
+    buildCachedOnlyQuantSignal(category, underlyingMarket),
+    `基金 ${fundCode} 量化信号`,
+  );
   quantSignalCache.set(fundCode, { expiresAt: Date.now() + QUANT_SIGNAL_CACHE_TTL_MS, signal });
   return signal;
 };
@@ -1715,7 +1979,7 @@ const buildHoldingsSnapshot = async (
   );
   const quantSignals = await Promise.all(
     validFunds.map(async (fund) => {
-      return [fund.code, await getFundQuantSignal(fund.code, { cachedOnly: quantCachedOnly })] as const;
+      return [fund.code, await getFundQuantSignal(fund.code, { cachedOnly: quantCachedOnly, fundName: fund.name })] as const;
     }),
   );
   const enrichmentMap = new Map(enrichments);
@@ -1781,6 +2045,7 @@ const buildHoldingsSnapshot = async (
 
 const buildPortfolioQuantSummary = (holdings: HoldingSnapshotItem[], totalAssets: number) => {
   const available = holdings.filter((item) => item.quantSignal?.dataStatus === 'available');
+  const availableAssets = available.reduce((sum, item) => sum + item.marketValue, 0);
   if (available.length === 0 || totalAssets <= 0) {
     return {
       status: 'missing' as const,
@@ -1788,11 +2053,12 @@ const buildPortfolioQuantSummary = (holdings: HoldingSnapshotItem[], totalAssets
       signal: '观望' as FundQuantSignalSnapshot['signal'],
       availableCount: available.length,
       totalCount: holdings.length,
+      coveragePct: 0,
     };
   }
 
   const weightedScore = available.reduce((sum, item) => {
-    const weight = item.marketValue / totalAssets;
+    const weight = availableAssets > 0 ? item.marketValue / availableAssets : 0;
     return sum + (item.quantSignal?.score ?? 0) * weight;
   }, 0);
 
@@ -1802,6 +2068,7 @@ const buildPortfolioQuantSummary = (holdings: HoldingSnapshotItem[], totalAssets
     signal: getQuantSignalLabel(weightedScore),
     availableCount: available.length,
     totalCount: holdings.length,
+    coveragePct: totalAssets > 0 ? round((availableAssets / totalAssets) * 100) : 0,
   };
 };
 
@@ -2242,32 +2509,82 @@ const formatQuantMetric = (value: number | undefined, suffix = '%') => {
   return `${value >= 0 ? '+' : ''}${round(value).toFixed(2)}${suffix}`;
 };
 
+const getQuantTrendLabel = (trendStatus?: FundQuantSignalSnapshot['trendStatus']) => {
+  if (trendStatus === 'strong') return '均线偏强';
+  if (trendStatus === 'weak') return '均线偏弱';
+  if (trendStatus === 'neutral') return '均线中性';
+  return '均线不足';
+};
+
+const getQuantValuationLabel = (signal: FundQuantSignalSnapshot) => {
+  if (signal.valuationStatus === 'missing' || signal.valuationScore === undefined) return '估值不足';
+  if (signal.valuationScore >= 0.8) return '估值偏低';
+  if (signal.valuationScore <= -0.8) return '估值偏高';
+  return '估值中性';
+};
+
+const formatQuantBenchmark = (benchmark: QuantBenchmarkSnapshot | null) => {
+  if (!benchmark) return '基准: 缺失';
+  if (benchmark.changePct === undefined || benchmark.changePct === null) {
+    return `基准: ${benchmark.name}`;
+  }
+  return `基准: ${benchmark.name} ${formatPct(benchmark.changePct)}`;
+};
+
 const buildQuantAnalysisMessage = async (env: Env) => {
   const payload = await readGistBackup(env);
   const funds = payload.funds.filter((fund) => fund.holdingShares > 0 && fund.currentNav > 0);
-  const signals = await Promise.all(
-    funds.map(async (fund) => ({
-      fund,
-      marketValue: fund.holdingShares * fund.currentNav,
-      signal: await getFundQuantSignal(fund.code),
-    })),
+  const signals = await mapWithConcurrency(
+    funds,
+    QUANT_CONCURRENCY,
+    async (fund) => {
+      const fundType = identifyFundType({ code: fund.code, name: fund.name });
+      const signal = await getFundQuantSignal(fund.code, { fundName: fund.name });
+      const benchmark = await withFallbackTimeout(
+        resolveQuantBenchmark(fund.code, fund.name, signal.fundCategory),
+        QUANT_BENCHMARK_TIMEOUT_MS,
+        null,
+        `基金 ${fund.code} 基准读取`,
+      );
+      const thresholdProfile = resolveQuantThresholdProfile(signal.fundCategory, signal.underlyingMarket);
+      return {
+        fund,
+        marketValue: fund.holdingShares * fund.currentNav,
+        signal,
+        benchmark,
+        thresholdProfile,
+        groupLabel: getQuantGroupLabelForProfile(signal, thresholdProfile),
+        categoryLabel: fundType.category,
+        marketLabel: fundType.underlyingMarket,
+      };
+    },
   );
   const totalAssets = signals.reduce((sum, item) => sum + item.marketValue, 0);
   const available = signals.filter((item) => item.signal.dataStatus === 'available');
+  const availableAssets = available.reduce((sum, item) => sum + item.marketValue, 0);
   const portfolioScore =
-    totalAssets > 0
-      ? available.reduce((sum, item) => sum + item.signal.score * (item.marketValue / totalAssets), 0)
+    availableAssets > 0
+      ? available.reduce((sum, item) => sum + item.signal.score * (item.marketValue / availableAssets), 0)
       : 0;
   const sorted = [...signals].sort((a, b) => b.signal.score - a.signal.score);
+  const groups = [
+    { title: '强势持有', items: sorted.filter((item) => item.groupLabel === '强势持有') },
+    { title: '中性观察', items: sorted.filter((item) => item.groupLabel === '中性观察') },
+    { title: '风险升高', items: sorted.filter((item) => item.groupLabel === '风险升高') },
+    { title: '数据不足', items: sorted.filter((item) => item.groupLabel === '数据不足') },
+  ].filter((group) => group.items.length > 0);
 
-  const fundLines = sorted.map((item, index) => {
-    const { fund, signal } = item;
-    if (signal.dataStatus !== 'available') {
-      return `${index + 1}. ${fund.name}：观望，${signal.reason}`;
-    }
+  const fundLines = groups.flatMap((group) => [
+    `${group.title}：`,
+    ...group.items.map((item, index) => {
+      const { fund, signal } = item;
+      if (signal.dataStatus !== 'available') {
+        return `${index + 1}. ${fund.name}（${item.categoryLabel}/${item.marketLabel}）：观望，${signal.reason}`;
+      }
 
-    return `${index + 1}. ${fund.name}：${signal.signal}，评分 ${formatQuantMetric(signal.score, '')}，20日 ${formatQuantMetric(signal.return20d)}，60日 ${formatQuantMetric(signal.return60d)}，回撤 ${formatQuantMetric(signal.maxDrawdown120d)}`;
-  });
+      return `${index + 1}. ${fund.name}（${item.categoryLabel}/${item.marketLabel}）：${signal.signal}，评分 ${formatQuantMetric(signal.score, '')}，20日 ${formatQuantMetric(signal.return20d)}，60日 ${formatQuantMetric(signal.return60d)}，MA20 ${formatQuantMetric(signal.distanceToMa20Pct)}，${getQuantTrendLabel(signal.trendStatus)}，${getQuantValuationLabel(signal)}${signal.valuationPositionPct !== undefined ? `（历史位置 ${signal.valuationPositionPct.toFixed(0)}%）` : ''}，${formatQuantBenchmark(item.benchmark)}，回撤 ${formatQuantMetric(signal.maxDrawdown120d)}`;
+    }),
+  ]);
 
   return [
     '养基AI量化分析',
@@ -2275,8 +2592,8 @@ const buildQuantAnalysisMessage = async (env: Env) => {
     '',
     `组合量化信号：${getQuantSignalLabel(portfolioScore)}`,
     `组合量化评分：${round(portfolioScore).toFixed(2)}`,
-    `覆盖：${available.length}/${funds.length} 只`,
-    '说明：评分只基于历史净值动量、波动率和最大回撤；估值因子暂缺，不代表基金便宜或昂贵。',
+    `覆盖：${available.length}/${funds.length} 只，资产覆盖 ${formatQuantMetric(totalAssets > 0 ? (availableAssets / totalAssets) * 100 : 0)}`,
+    '说明：评分基于历史净值动量、MA20/MA60 趋势、历史净值位置估值 proxy、波动率和最大回撤；估值不是 PE/PB，不代表基金便宜或昂贵。',
     '',
     '基金明细：',
     ...fundLines,
@@ -2291,7 +2608,8 @@ const buildAnalysisMessage = async (
   const payload = await readGistBackup(env);
   logStepDuration('读取 Gist', startedAt);
 
-  const isShortAnalysis = options?.question === SHORT_ANALYSIS_QUESTION;
+  const isShortAnalysis =
+    options?.question === SHORT_ANALYSIS_QUESTION || options?.question === MARKET_ANALYSIS_QUESTION;
   const snapshotStartedAt = Date.now();
   const snapshot = await buildHoldingsSnapshot(payload, {
     holdingsTimeoutMs: isShortAnalysis ? FAST_ANALYSIS_FUND_HOLDINGS_TIMEOUT_MS : DEFAULT_FUND_HOLDINGS_TIMEOUT_MS,
@@ -2422,9 +2740,19 @@ const handleTelegramWebhook = async (request: Request, env: Env) => {
   }
 
   if (isQuantAnalysisCommand(text)) {
-    const quantMessage = await buildQuantAnalysisMessage(env);
-    const sentMessages = await sendTelegramMessage(env, quantMessage, chatIdStr);
-    return json({ ok: true, handled: 'quantAnalysis', sentMessages });
+    const pendingMessages = await sendTelegramMessage(env, TELEGRAM_ANALYSIS_PENDING_TEXT, chatIdStr);
+    try {
+      const quantMessage = await buildQuantAnalysisMessage(env);
+      const sentMessages = await sendTelegramMessage(env, quantMessage, chatIdStr);
+      return json({ ok: true, handled: 'quantAnalysis', sentMessages: pendingMessages + sentMessages });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      const failureMessages = await sendTelegramMessage(env, `量化分析失败：${message}`, chatIdStr);
+      return json(
+        { ok: false, handled: 'quantAnalysis', error: message, sentMessages: pendingMessages + failureMessages },
+        500,
+      );
+    }
   }
 
   const commandConfig = resolveTelegramCommandConfig(text);
@@ -2526,15 +2854,42 @@ const handleQqOfficialWebhook = async (request: Request, env: Env) => {
   }
 
   if (isQuantAnalysisCommand(commandText)) {
-    const quantMessage = await buildQuantAnalysisMessage(env);
-    const sentMessages = await sendQqOfficialGroupTextChunks({
+    const pendingMessages = await sendQqOfficialGroupTextChunks({
       env,
       groupOpenid: message.group_openid,
-      text: quantMessage,
+      text: TELEGRAM_ANALYSIS_PENDING_TEXT,
       msgId: message.id,
       startSeq: 1,
     });
-    return json({ ok: true, handled: 'quantAnalysis', sentMessages });
+    try {
+      const quantMessage = await buildQuantAnalysisMessage(env);
+      const sentMessages = await sendQqOfficialGroupTextChunks({
+        env,
+        groupOpenid: message.group_openid,
+        text: quantMessage,
+        msgId: message.id,
+        startSeq: 2,
+      });
+      return json({ ok: true, handled: 'quantAnalysis', sentMessages: pendingMessages + sentMessages });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : '未知错误';
+      const failureMessages = await sendQqOfficialGroupTextChunks({
+        env,
+        groupOpenid: message.group_openid,
+        text: `量化分析失败：${messageText}`,
+        msgId: message.id,
+        startSeq: 2,
+      });
+      return json(
+        {
+          ok: false,
+          handled: 'quantAnalysis',
+          error: messageText,
+          sentMessages: pendingMessages + failureMessages,
+        },
+        500,
+      );
+    }
   }
 
   const commandConfig = resolveTelegramCommandConfig(commandText);
@@ -2641,9 +2996,24 @@ const handleOneBotWebhook = async (request: Request, env: Env) => {
   }
 
   if (isQuantAnalysisCommand(commandText)) {
-    const quantMessage = await buildQuantAnalysisMessage(env);
-    const sentMessages = await sendOneBotGroupTextChunks(env, groupId, quantMessage);
-    return json({ ok: true, handled: 'quantAnalysis', sentMessages });
+    const pendingMessages = await sendOneBotGroupTextChunks(env, groupId, TELEGRAM_ANALYSIS_PENDING_TEXT);
+    try {
+      const quantMessage = await buildQuantAnalysisMessage(env);
+      const sentMessages = await sendOneBotGroupTextChunks(env, groupId, quantMessage);
+      return json({ ok: true, handled: 'quantAnalysis', sentMessages: pendingMessages + sentMessages });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : '未知错误';
+      const failureMessages = await sendOneBotGroupTextChunks(env, groupId, `量化分析失败：${messageText}`);
+      return json(
+        {
+          ok: false,
+          handled: 'quantAnalysis',
+          error: messageText,
+          sentMessages: pendingMessages + failureMessages,
+        },
+        500,
+      );
+    }
   }
 
   const commandConfig = resolveTelegramCommandConfig(commandText);

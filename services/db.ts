@@ -34,6 +34,8 @@ import { sanitizeWatchlistName } from './watchlistName';
 import { runFundQuotePipeline } from './fundQuotePipeline';
 import { identifyFundType } from './fundTypeIdentifier';
 import { executeInvestmentPlans } from './investmentPlan';
+import { recordFundDailyEarnings } from './fundDailyEarnings';
+import { recordFundValuationSeries } from './fundValuationTimeseries';
 import type { RefreshExecutionResult, RefreshExecutionStatus } from './refreshPolicy';
 
 export {
@@ -630,6 +632,16 @@ export const refreshFundData = (options?: RefreshOptions) => {
           } = metrics;
 
           const fundIntradayTrend = intradayTrends.get(candidate.code);
+          if (fundIntradayTrend) {
+            recordFundValuationSeries(candidate.code, fundIntradayTrend, todayStr);
+          }
+          recordFundDailyEarnings({
+            code: fund.code,
+            date: effectivePctDate || todayStr,
+            earnings: dayChangeVal,
+            rate: nextDayChangePct,
+            baseCostAmount: fund.holdingShares * fund.costPrice,
+          });
           // 不在 shouldSkipUpdate 中检查 fundIntradayTrend（每分钟变化）
           const shouldSkipUpdate =
             isNearlyEqual(fund.currentNav, nav) &&
@@ -802,6 +814,9 @@ export const refreshWatchlistData = (options?: RefreshOptions) => {
             const nextLastUpdate = effectivePctDate || todayStr;
 
             const fundIntradayTrend = intradayTrends.get(candidate.code);
+            if (fundIntradayTrend) {
+              recordFundValuationSeries(candidate.code, fundIntradayTrend, todayStr);
+            }
             const shouldSkipUpdate =
               isNearlyEqual(item.currentPrice, effectiveCurrentPrice) &&
               isNearlyEqual(item.dayChangePct, nextDayChangePct) &&
