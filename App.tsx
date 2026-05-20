@@ -10,11 +10,12 @@ import type { TabType } from './types';
 import { Icons } from './components/Icon';
 import { LanguageProvider, useTranslation } from './services/i18n';
 import { ThemeProvider } from './services/ThemeContext';
-import { SettingsProvider } from './services/SettingsContext';
+import { SettingsProvider, useSettings } from './services/SettingsContext';
 import { EdgeSwipeProvider } from './services/edgeSwipeState';
 import { resetDragState, useEdgeSwipe } from './services/useEdgeSwipe';
 import { closeTopOverlay, getActiveOverlayId } from './services/overlayStack';
 import { useVersionCheck } from './services/versionCheck';
+import { checkAutoGistSyncNow } from './services/gistAutoSync';
 
 const SettingsPage = lazy(() =>
   import('./components/SettingsPage').then((m) => ({ default: m.SettingsPage })),
@@ -37,6 +38,7 @@ const AppContent: React.FC = () => {
   const [openAiSettingsRequested, setOpenAiSettingsRequested] = useState(false);
   const [isMobileChromeHidden, setIsMobileChromeHidden] = useState(false);
   const { t } = useTranslation();
+  const { autoGistSync, gistAutoSyncIntervalMinutes } = useSettings();
   const { setDragState, isDragging } = useEdgeSwipe();
   const { newVersionAvailable, refreshApp } = useVersionCheck();
   const isDraggingRef = useRef(isDragging);
@@ -197,6 +199,37 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     setIsMobileChromeHidden(false);
   }, [activeTab]);
+
+  useEffect(() => {
+    if (!autoGistSync) return;
+
+    let active = true;
+    const runSync = () => {
+      if (!active) return;
+      void checkAutoGistSyncNow();
+    };
+
+    runSync();
+
+    const intervalMs = Math.max(1, gistAutoSyncIntervalMinutes) * 60_000;
+    const timer = window.setInterval(runSync, intervalMs);
+    const handleFocus = () => runSync();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        runSync();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [autoGistSync, gistAutoSyncIntervalMinutes]);
 
   useEffect(() => {
     let startX = 0;

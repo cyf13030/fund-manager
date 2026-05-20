@@ -64,6 +64,10 @@ vi.mock('../../services/ThemeContext', () => ({
 
 vi.mock('../../services/SettingsContext', () => ({
   SettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useSettings: () => ({
+    autoGistSync: false,
+    gistAutoSyncIntervalMinutes: 5,
+  }),
 }));
 
 vi.mock('../../services/edgeSwipeState', () => ({

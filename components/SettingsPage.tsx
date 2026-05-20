@@ -44,6 +44,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
     setAutoRefresh,
     autoGistSync,
     setAutoGistSync,
+    gistAutoSyncIntervalMinutes,
+    setGistAutoSyncIntervalMinutes,
     openaiApiKey,
     setOpenaiApiKey,
     setOpenaiModel,
@@ -939,7 +941,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
             <div>
               <div className="text-sm font-semibold text-[var(--app-shell-ink)]">自动同步 Gist</div>
               <div className="mt-1 text-xs text-[var(--app-shell-muted)]">
-                保存持仓、自选或投资画像后自动推送到默认 Gist。
+                保存后自动推送；保持电脑和手机数据一致。
               </div>
             </div>
             <button
@@ -953,6 +955,25 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
                 className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-transform ${autoGistSync ? 'translate-x-6' : 'translate-x-1'}`}
               />
             </button>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-4 rounded-2xl border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-4 py-3">
+            <div>
+              <div className="text-sm font-semibold text-[var(--app-shell-ink)]">同步间隔</div>
+              <div className="mt-1 text-xs text-[var(--app-shell-muted)]">
+                应用打开时每隔一段时间自动检查并同步一次。
+              </div>
+            </div>
+            <SelectDropdown
+              options={[
+                { value: '5', label: '5 分钟' },
+                { value: '10', label: '10 分钟' },
+              ]}
+              value={String(gistAutoSyncIntervalMinutes)}
+              onChange={(value) => setGistAutoSyncIntervalMinutes(value === '10' ? 10 : 5)}
+              ariaLabel="自动同步间隔"
+              className="min-w-24 justify-end text-sm font-medium text-[var(--app-shell-ink)]"
+            />
           </div>
 
           <div className="space-y-3">

@@ -1,5 +1,9 @@
-import { exportFundsToJsonString } from './db';
-import { overwriteSyncGist } from './gistSync/index';
+import { exportFundsToJsonString, importFundsFromBackupContent } from './db';
+import {
+  downloadSyncGistContent,
+  listSyncGists,
+  overwriteSyncGist,
+} from './gistSync/index';
 
 interface StoredDefaultGistTarget {
   id: string;
@@ -10,8 +14,10 @@ interface StoredDefaultGistTarget {
 
 interface StoredAutoSyncSettings {
   autoGistSync?: boolean;
+  gistAutoSyncIntervalMinutes?: number;
   githubToken?: string;
   defaultGistTarget?: StoredDefaultGistTarget | null;
+  investmentProfile?: unknown;
 }
 
 const STORAGE_KEY = 'app-settings-preference';
@@ -36,7 +42,7 @@ const readStoredSettings = (): StoredAutoSyncSettings | null => {
   }
 };
 
-const writeStoredDefaultTarget = (target: StoredDefaultGistTarget) => {
+const writeStoredSettingsPatch = (patch: Partial<StoredAutoSyncSettings>) => {
   if (!isBrowser()) return;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -46,12 +52,20 @@ const writeStoredDefaultTarget = (target: StoredDefaultGistTarget) => {
       STORAGE_KEY,
       JSON.stringify({
         ...parsed,
-        defaultGistTarget: target,
+        ...patch,
       }),
     );
   } catch {
-    // 忽略本地设置写回失败，不影响已完成的 gist 上传
+    // 忽略本地设置写回失败，不影响同步流程
   }
+};
+
+const writeStoredDefaultTarget = (target: StoredDefaultGistTarget) => {
+  writeStoredSettingsPatch({ defaultGistTarget: target });
+};
+
+const writeStoredInvestmentProfile = (investmentProfile: unknown) => {
+  writeStoredSettingsPatch({ investmentProfile });
 };
 
 const shouldAutoSync = () => {
@@ -70,6 +84,57 @@ const performAutoSync = async () => {
   const token = settings?.githubToken?.trim();
   const target = settings?.defaultGistTarget;
   if (!token || !target?.id) return;
+
+  if (pending) {
+    pending = false;
+
+    const content = await exportFundsToJsonString();
+    const result = await overwriteSyncGist({
+      token,
+      gistId: target.id,
+      content,
+      description: target.description,
+    });
+
+    writeStoredDefaultTarget({
+      id: result.id,
+      description: result.description,
+      updatedAt: result.updated_at,
+      fileName: target.fileName || 'fund-manager-sync.json',
+    });
+
+    return;
+  }
+
+  const gists = await listSyncGists(token);
+  const remoteTarget = gists.find((item) => item.id === target.id);
+  if (!remoteTarget) return;
+
+  const remoteUpdatedAt = new Date(remoteTarget.updated_at).getTime();
+  const localUpdatedAt = new Date(target.updatedAt).getTime();
+  if (Number.isFinite(remoteUpdatedAt) && Number.isFinite(localUpdatedAt) && remoteUpdatedAt > localUpdatedAt) {
+    if (remoteTarget.isBackupValid === false) return;
+
+    const content = await downloadSyncGistContent({ token, gistId: target.id });
+    const parsedContent = JSON.parse(content) as { investmentProfile?: unknown };
+    await withAutoGistSyncSuppressed(async () => {
+      await importFundsFromBackupContent(content, { importMode: 'replaceAll' });
+    });
+
+    if (parsedContent.investmentProfile && typeof parsedContent.investmentProfile === 'object') {
+      writeStoredInvestmentProfile(parsedContent.investmentProfile);
+    }
+
+    writeStoredDefaultTarget({
+      id: remoteTarget.id,
+      description: remoteTarget.description,
+      updatedAt: remoteTarget.updated_at,
+      fileName: target.fileName || 'fund-manager-sync.json',
+    });
+    return;
+  }
+
+  if (!pending) return;
 
   const content = await exportFundsToJsonString();
   const result = await overwriteSyncGist({
@@ -98,10 +163,6 @@ const runAutoSync = async () => {
     pending = true;
     return;
   }
-
-  if (!pending) return;
-
-  pending = false;
 
   inFlight = (async () => {
     try {
@@ -135,6 +196,10 @@ export const scheduleAutoGistSync = () => {
 
 export const syncNowWithAutoGist = () => {
   scheduleAutoGistSync();
+};
+
+export const checkAutoGistSyncNow = () => {
+  return runAutoSync();
 };
 
 export const withAutoGistSyncSuppressed = async <T>(fn: () => Promise<T> | T): Promise<T> => {

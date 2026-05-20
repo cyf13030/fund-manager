@@ -2,18 +2,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockedDeps = vi.hoisted(() => ({
   exportFundsToJsonString: vi.fn(),
+  importFundsFromBackupContent: vi.fn(),
+  listSyncGists: vi.fn(),
+  downloadSyncGistContent: vi.fn(),
   overwriteSyncGist: vi.fn(),
 }));
 
 vi.mock('../db', () => ({
   exportFundsToJsonString: mockedDeps.exportFundsToJsonString,
+  importFundsFromBackupContent: mockedDeps.importFundsFromBackupContent,
 }));
 
 vi.mock('../gistSync/index', () => ({
+  listSyncGists: mockedDeps.listSyncGists,
+  downloadSyncGistContent: mockedDeps.downloadSyncGistContent,
   overwriteSyncGist: mockedDeps.overwriteSyncGist,
 }));
 
 import {
+  checkAutoGistSyncNow,
   scheduleAutoGistSync,
   syncNowWithAutoGist,
   updateAutoGistTargetSnapshot,
@@ -62,6 +69,45 @@ describe('gistAutoSync', () => {
       gistId: 'gist-1',
       content: '{"version":1}',
       description: '默认备份',
+    });
+  });
+
+  it('checks remote gist and imports newer content immediately', async () => {
+    localStorage.setItem(
+      'app-settings-preference',
+      JSON.stringify({
+        autoGistSync: true,
+        githubToken: 'ghp_testtoken1234567890',
+        defaultGistTarget: {
+          id: 'gist-1',
+          description: '默认备份',
+          updatedAt: '2026-03-20T00:00:00Z',
+          fileName: 'fund-manager-sync.json',
+        },
+      }),
+    );
+    mockedDeps.listSyncGists.mockResolvedValue([
+      {
+        id: 'gist-1',
+        description: '默认备份',
+        updated_at: '2026-03-21T00:00:00Z',
+        hasSyncFile: true,
+        isBackupValid: true,
+        fileName: 'fund-manager-sync.json',
+      },
+    ]);
+    mockedDeps.downloadSyncGistContent.mockResolvedValue('{"version":2}');
+    mockedDeps.importFundsFromBackupContent.mockResolvedValue({ added: 1, skipped: 0 });
+
+    await checkAutoGistSyncNow();
+
+    expect(mockedDeps.listSyncGists).toHaveBeenCalledWith('ghp_testtoken1234567890');
+    expect(mockedDeps.downloadSyncGistContent).toHaveBeenCalledWith({
+      token: 'ghp_testtoken1234567890',
+      gistId: 'gist-1',
+    });
+    expect(mockedDeps.importFundsFromBackupContent).toHaveBeenCalledWith('{"version":2}', {
+      importMode: 'replaceAll',
     });
   });
 

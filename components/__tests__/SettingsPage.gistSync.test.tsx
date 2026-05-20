@@ -19,6 +19,10 @@ const mockedDeps = vi.hoisted(() => ({
   settings: {
     autoRefresh: false,
     setAutoRefresh: vi.fn(),
+    autoGistSync: false,
+    setAutoGistSync: vi.fn(),
+    gistAutoSyncIntervalMinutes: 5,
+    setGistAutoSyncIntervalMinutes: vi.fn(),
     aiProvider: 'openai' as const,
     setAiProvider: vi.fn(),
     openaiApiKey: '',

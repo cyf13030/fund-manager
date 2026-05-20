@@ -36,6 +36,8 @@ interface SettingsContextValue {
   setAutoRefresh: (val: boolean) => void;
   autoGistSync: boolean;
   setAutoGistSync: (val: boolean) => void;
+  gistAutoSyncIntervalMinutes: 5 | 10;
+  setGistAutoSyncIntervalMinutes: (val: 5 | 10) => void;
   useUnifiedRefresh: boolean;
   setUseUnifiedRefresh: (val: boolean) => void;
   aiProvider: AiProvider;
@@ -135,6 +137,7 @@ const parseLlmProviders = (value: unknown): LlmProviderConfig[] => {
 const defaultSettings = {
   autoRefresh: false,
   autoGistSync: false,
+  gistAutoSyncIntervalMinutes: 5 as 5 | 10,
   useUnifiedRefresh: false,
   aiProvider: 'openai' as AiProvider,
   openaiApiKey: '',
@@ -260,6 +263,8 @@ const parseSavedSettings = (saved: string): typeof defaultSettings => {
       typeof parsed.autoRefresh === 'boolean' ? parsed.autoRefresh : defaultSettings.autoRefresh,
     autoGistSync:
       typeof parsed.autoGistSync === 'boolean' ? parsed.autoGistSync : defaultSettings.autoGistSync,
+    gistAutoSyncIntervalMinutes:
+      parsed.gistAutoSyncIntervalMinutes === 10 ? 10 : defaultSettings.gistAutoSyncIntervalMinutes,
     useUnifiedRefresh:
       typeof parsed.useUnifiedRefresh === 'boolean'
         ? parsed.useUnifiedRefresh
@@ -298,6 +303,8 @@ const SettingsContext = createContext<SettingsContextValue>({
   setAutoRefresh: () => {},
   autoGistSync: defaultSettings.autoGistSync,
   setAutoGistSync: () => {},
+  gistAutoSyncIntervalMinutes: defaultSettings.gistAutoSyncIntervalMinutes,
+  setGistAutoSyncIntervalMinutes: () => {},
   useUnifiedRefresh: defaultSettings.useUnifiedRefresh,
   setUseUnifiedRefresh: () => {},
   aiProvider: defaultSettings.aiProvider,
@@ -358,6 +365,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const setAutoRefresh = (val: boolean) => updateSettings({ autoRefresh: val });
   const setAutoGistSync = (val: boolean) => updateSettings({ autoGistSync: val });
+  const setGistAutoSyncIntervalMinutes = (val: 5 | 10) =>
+    updateSettings({ gistAutoSyncIntervalMinutes: val });
   const setUseUnifiedRefresh = (val: boolean) => updateSettings({ useUnifiedRefresh: val });
   const setAiProvider = (val: AiProvider) => updateSettings({ aiProvider: val });
   const setOpenaiApiKey = (val: string) => updateSettings({ openaiApiKey: val });
@@ -443,6 +452,8 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setAutoRefresh,
         autoGistSync: settings.autoGistSync,
         setAutoGistSync,
+        gistAutoSyncIntervalMinutes: settings.gistAutoSyncIntervalMinutes,
+        setGistAutoSyncIntervalMinutes,
         useUnifiedRefresh: settings.useUnifiedRefresh,
         setUseUnifiedRefresh,
         aiProvider: settings.aiProvider,
