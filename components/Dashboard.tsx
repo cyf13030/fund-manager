@@ -349,6 +349,7 @@ export const Dashboard: React.FC = () => {
       await refreshFundData({ force });
       writeRefreshLastSuccessAt('fund', Date.now());
       setAvailableAssets(getAvailableAssets());
+      syncNowWithAutoGist();
       return true;
     } finally {
       refreshInFlightRef.current = false;

@@ -1,6 +1,6 @@
 /// <reference types="vitest/globals" />
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Watchlist } from '../Watchlist';
 import type { Fund, WatchlistItem } from '../../types';
@@ -19,6 +19,7 @@ const mocked = vi.hoisted(() => {
     refreshWatchlistData: vi.fn().mockResolvedValue(undefined),
     watchlistsDelete: vi.fn(),
     watchlistsUpdate: vi.fn(),
+    syncNowWithAutoGist: vi.fn(),
   };
 });
 
@@ -39,6 +40,10 @@ vi.mock('../../services/db', () => ({
   },
   refreshWatchlistData: mocked.refreshWatchlistData,
   refreshFundData: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../services/gistAutoSync', () => ({
+  syncNowWithAutoGist: mocked.syncNowWithAutoGist,
 }));
 
 vi.mock('../../services/i18n', () => ({
@@ -175,5 +180,20 @@ describe('Watchlist sort persistence', () => {
     render(<Watchlist />);
     expect(getWatchlistOrder()).toEqual(['自选A', '自选B', '自选C']);
     expect(localStorage.getItem('watchlist.sortState.v1')).toContain('name');
+  });
+
+  it('刷新自选成功后触发 Gist 自动同步', async () => {
+    sessionStorage.setItem('lastAutoUpdate_timestamp:watchlist', String(Date.now()));
+    render(<Watchlist />);
+
+    const refreshButton = document.querySelector<HTMLButtonElement>('.refresh-btn');
+    expect(refreshButton).not.toBeNull();
+
+    fireEvent.click(refreshButton!);
+
+    await waitFor(() => {
+      expect(mocked.refreshWatchlistData).toHaveBeenCalledWith({ force: true });
+      expect(mocked.syncNowWithAutoGist).toHaveBeenCalledTimes(1);
+    });
   });
 });

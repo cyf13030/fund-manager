@@ -1,6 +1,6 @@
 /// <reference types="vitest/globals" />
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dashboard } from '../Dashboard';
 import type { Account, Fund } from '../../types';
@@ -18,6 +18,7 @@ const mocked = vi.hoisted(() => {
     state,
     initDB: vi.fn(),
     refreshFundData: vi.fn().mockResolvedValue(undefined),
+    syncNowWithAutoGist: vi.fn(),
   };
 });
 
@@ -44,6 +45,10 @@ vi.mock('../../services/db', () => ({
     holdingGainPct: 10,
   }),
   saveTotalAssetsSnapshot: vi.fn(),
+}));
+
+vi.mock('../../services/gistAutoSync', () => ({
+  syncNowWithAutoGist: mocked.syncNowWithAutoGist,
 }));
 
 vi.mock('../../services/i18n', () => ({
@@ -340,5 +345,20 @@ describe('Dashboard sort persistence', () => {
     render(<Dashboard />);
     expect(getFundOrder()).toEqual(['基金A', '基金B', '基金C']);
     expect(localStorage.getItem('dashboard.sortState.v1')).toContain('name');
+  });
+
+  it('刷新持仓成功后触发 Gist 自动同步', async () => {
+    sessionStorage.setItem('lastAutoUpdate_timestamp:fund', String(Date.now()));
+    render(<Dashboard />);
+
+    const refreshButton = document.querySelector<HTMLButtonElement>('.refresh-btn');
+    expect(refreshButton).not.toBeNull();
+
+    fireEvent.click(refreshButton!);
+
+    await waitFor(() => {
+      expect(mocked.refreshFundData).toHaveBeenCalledWith({ force: true });
+      expect(mocked.syncNowWithAutoGist).toHaveBeenCalledTimes(1);
+    });
   });
 });

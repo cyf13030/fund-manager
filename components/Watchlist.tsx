@@ -153,6 +153,7 @@ export const Watchlist: React.FC = () => {
     try {
       await runner();
       writeRefreshLastSuccessAt('watchlist', Date.now());
+      syncNowWithAutoGist();
       return true;
     } finally {
       refreshInFlightRef.current = false;
