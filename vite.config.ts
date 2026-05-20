@@ -230,6 +230,55 @@ Subjects:
 ${subjects}`;
   };
 
+  const localizeCommitSubjectToZh = (subject: string): string => {
+    const match = subject.match(
+      /^(feat|fix|chore|refactor|docs|style|perf|test|ci|build|revert)(?:\(([^)]+)\))?:\s*(.+)$/i,
+    );
+    const scope = match?.[2]?.trim().toLowerCase() || '';
+    const rawTitle = (match?.[3] || subject).trim();
+    const lowerTitle = rawTitle.toLowerCase();
+
+    const exactTranslations: Record<string, string> = {
+      'add periodic auto sync': '添加定期自动同步',
+      'add automatic sync': '添加自动同步',
+      'update github pages demo url': '更新 GitHub Pages 演示地址',
+      'prepare github pages for fork': '为 fork 适配 GitHub Pages',
+      'reduce analysis blocking': '减少分析阻塞',
+      'add worker env vars reference table to readme': '在 README 添加 Worker 环境变量参考表',
+      'present build suggestions as observations': '将建仓建议改为观察项展示',
+      'add onebot qq webhook': '添加 OneBot QQ webhook',
+      'add qq official bot webhook': '添加 QQ 官方机器人 webhook',
+      'add intraday scheduled analysis': '添加盘中定时分析',
+    };
+
+    const translatedTitle = exactTranslations[lowerTitle];
+    if (translatedTitle) return translatedTitle;
+
+    const scopeLabels: Record<string, string> = {
+      gist: 'Gist',
+      web: '网页',
+      worker: 'Worker',
+      qq: 'QQ',
+    };
+    const typeLabels: Record<string, string> = {
+      feat: '新增',
+      fix: '修复',
+      docs: '文档',
+      refactor: '重构',
+      perf: '优化',
+      test: '测试',
+      build: '构建',
+      ci: 'CI',
+      chore: '维护',
+      style: '样式',
+      revert: '回滚',
+    };
+
+    const type = match?.[1]?.toLowerCase() || '';
+    const prefix = [scopeLabels[scope], typeLabels[type]].filter(Boolean).join('：');
+    return prefix ? `${prefix}：${rawTitle}` : rawTitle;
+  };
+
   const mergeTranslationsIntoCommits = (
     commits: CommitInfo[],
     translations: CommitTranslation[],
@@ -382,7 +431,7 @@ ${subjects}`;
   const commitsJson = JSON.stringify(
     commits.slice(0, MAX_COMMITS).map((c) => ({
       hash: c.hash,
-      subjectZh: c.subjectZh || c.subject,
+      subjectZh: c.subjectZh || localizeCommitSubjectToZh(c.subject),
       subjectEn: c.subjectEn || c.subject,
     })),
   );

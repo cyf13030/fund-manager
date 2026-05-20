@@ -21,7 +21,6 @@ vi.mock('../gistSync/index', () => ({
 
 import {
   checkAutoGistSyncNow,
-  scheduleAutoGistSync,
   syncNowWithAutoGist,
   updateAutoGistTargetSnapshot,
   withAutoGistSyncSuppressed,
