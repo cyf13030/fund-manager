@@ -9,6 +9,17 @@ import {
 } from '../services/fundDailyEarnings';
 import type { Fund } from '../types';
 
+const addDays = (dateStr: string, delta: number): string => {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  if (!year || !month || !day) return dateStr;
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + delta);
+  const nextYear = date.getFullYear();
+  const nextMonth = String(date.getMonth() + 1).padStart(2, '0');
+  const nextDay = String(date.getDate()).padStart(2, '0');
+  return `${nextYear}-${nextMonth}-${nextDay}`;
+};
+
 interface MyEarningsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -56,12 +67,13 @@ export const MyEarningsModal: React.FC<MyEarningsModalProps> = ({ isOpen, onClos
       setSelectedDate('');
       return;
     }
-    if (!selectedDate || !availableDates.includes(selectedDate)) {
+    if (!selectedDate) {
       setSelectedDate(availableDates[0]);
     }
   }, [availableDates, isOpen, selectedDate]);
 
   const selectedSummary = portfolioDailyEarnings.find((item) => item.date === selectedDate) ?? null;
+  const selectedHasData = selectedSummary !== null;
 
   const selectedFundRows = useMemo<FundDailyEarningsRow[]>(() => {
     if (!selectedDate) return [];
@@ -111,35 +123,47 @@ export const MyEarningsModal: React.FC<MyEarningsModalProps> = ({ isOpen, onClos
                 onChange={(e) => setSelectedDate(e.target.value)}
                 className="rounded-full border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-3 py-2 text-sm text-[var(--app-shell-ink)] outline-none transition-colors focus:border-[var(--app-shell-line-strong)]"
               />
-              <div className="flex flex-wrap gap-2">
-                {availableDates.slice(0, 5).map((date) => (
-                  <button
-                    key={date}
-                    type="button"
-                    onClick={() => setSelectedDate(date)}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-                      selectedDate === date
-                        ? 'border-[var(--app-shell-line-strong)] bg-[var(--app-shell-panel-strong)] text-[var(--app-shell-ink)]'
-                        : 'border-[var(--app-shell-line)] bg-[var(--app-shell-panel)] text-[var(--app-shell-muted)] hover:text-[var(--app-shell-ink)]'
-                    }`}
-                  >
-                    {date}
-                  </button>
-                ))}
-              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedDate((current) => (current ? addDays(current, -1) : current))}
+                className="rounded-full border border-[var(--app-shell-line)] bg-[var(--app-shell-panel)] px-3 py-1.5 text-xs font-medium text-[var(--app-shell-muted)] transition-colors hover:text-[var(--app-shell-ink)]"
+              >
+                上一天
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedDate((current) => (current ? addDays(current, 1) : current))}
+                className="rounded-full border border-[var(--app-shell-line)] bg-[var(--app-shell-panel)] px-3 py-1.5 text-xs font-medium text-[var(--app-shell-muted)] transition-colors hover:text-[var(--app-shell-ink)]"
+              >
+                下一天
+              </button>
+              {availableDates.length > 0 && (
+                <select
+                  value={availableDates.includes(selectedDate) ? selectedDate : ''}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="rounded-full border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-3 py-2 text-xs text-[var(--app-shell-ink)] outline-none transition-colors focus:border-[var(--app-shell-line-strong)]"
+                >
+                  <option value="">有记录日期</option>
+                  {availableDates.map((date) => (
+                    <option key={date} value={date}>
+                      {date}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div className="grid gap-3 rounded-2xl border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)]/70 p-4 md:grid-cols-2">
               <div>
                 <div className="text-xs text-[var(--app-shell-muted)]">当日收益</div>
                 <div className={`mt-1 text-2xl font-bold ${getSignColor(selectedSummary?.earnings ?? 0)}`}>
-                  {selectedSummary ? formatSignedCurrency(selectedSummary.earnings) : '--'}
+                  {selectedHasData ? formatSignedCurrency(selectedSummary.earnings) : '--'}
                 </div>
               </div>
               <div>
                 <div className="text-xs text-[var(--app-shell-muted)]">当日收益率</div>
                 <div className={`mt-1 text-2xl font-bold ${getSignColor(selectedSummary?.rate ?? 0)}`}>
-                  {selectedSummary?.rate == null ? '--' : formatPct(selectedSummary.rate)}
+                  {!selectedHasData || selectedSummary?.rate == null ? '--' : formatPct(selectedSummary.rate)}
                 </div>
               </div>
             </div>
@@ -172,7 +196,7 @@ export const MyEarningsModal: React.FC<MyEarningsModalProps> = ({ isOpen, onClos
                 </div>
               ) : (
                 <div className="px-4 py-8 text-center text-xs text-[var(--app-shell-muted)]">
-                  该日期暂无收益记录，请先刷新持仓。
+                  该日期暂无收益记录。
                 </div>
               )}
             </div>

@@ -16,7 +16,7 @@ describe('MyEarningsModal', () => {
     localStorage.clear();
   });
 
-  it('按日期展示组合收益并切换到指定日期', () => {
+  it('按日期展示组合收益并允许切换到无记录日期', () => {
     recordFundDailyEarnings({ code: '000001', date: '2026-05-19', earnings: 100, rate: 1.2 });
     recordFundDailyEarnings({ code: '000002', date: '2026-05-19', earnings: 30, rate: 0.4 });
     recordFundDailyEarnings({ code: '000001', date: '2026-05-20', earnings: 50, rate: 0.6 });
@@ -33,13 +33,20 @@ describe('MyEarningsModal', () => {
     );
 
     expect(screen.getByRole('heading', { name: '我的收益' })).toBeInTheDocument();
-    expect(screen.getByText('2026-05-20')).toBeInTheDocument();
+    const dateInput = document.querySelector<HTMLInputElement>('input[type="date"]');
+    expect(dateInput).not.toBeNull();
+    expect(dateInput?.value).toBe('2026-05-20');
     expect(screen.getByText('基金A')).toBeInTheDocument();
     expect(screen.getAllByText('+50.00').length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole('button', { name: '2026-05-19' }));
+    fireEvent.change(dateInput!, { target: { value: '2026-05-18' } });
 
-    expect(screen.getByText('2026-05-19')).toBeInTheDocument();
+    expect(dateInput?.value).toBe('2026-05-18');
+    expect(screen.getByText('该日期暂无收益记录。')).toBeInTheDocument();
+
+    fireEvent.change(dateInput!, { target: { value: '2026-05-19' } });
+
+    expect(dateInput?.value).toBe('2026-05-19');
     expect(screen.getByText('基金B')).toBeInTheDocument();
     expect(screen.getByText('+130.00')).toBeInTheDocument();
   });
