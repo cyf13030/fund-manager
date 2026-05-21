@@ -325,6 +325,9 @@ describe('telegram ai reminder worker', () => {
     expect(body.sections.find((section) => section.title === '资金流')?.items[0].title).toBe(
       '人工智能 +32.00 亿',
     );
+    expect(body.sections.find((section) => section.title === '资金流')?.items[0].time).toMatch(
+      /^\d{2}:\d{2}$/,
+    );
     const portfolioNews = body.sections
       .find((section) => section.title === '盘后消息')
       ?.items.find((item) => item.title.includes('新能源'));

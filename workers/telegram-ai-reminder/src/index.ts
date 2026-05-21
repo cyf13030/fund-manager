@@ -2324,9 +2324,13 @@ const formatPublicTime = (value: string | undefined) => {
   if (compactMatch) {
     return `${compactMatch[4]}:${compactMatch[5]}`;
   }
-  const parsed = Date.parse(value.replace(/-/g, '/'));
-  if (!Number.isFinite(parsed)) return value;
-  return new Date(parsed).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  const parsed = Date.parse(value);
+  if (Number.isFinite(parsed)) {
+    return new Date(parsed).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+  const fallbackParsed = Date.parse(value.replace(/-/g, '/'));
+  if (!Number.isFinite(fallbackParsed)) return value;
+  return new Date(fallbackParsed).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 };
 
 const formatPublicMoney = (value: number) => {
