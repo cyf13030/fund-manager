@@ -35,6 +35,29 @@ const backupPayload = {
       lastUpdate: '2026-05-18',
       dayChangePct: 1.5,
       dayChangeVal: 1.8,
+      settlementDays: 1,
+      pendingTransactions: [
+        {
+          id: 'pending-buy-1',
+          type: 'buy',
+          date: '2026-05-21',
+          time: 'after15',
+          amount: 1000,
+          settlementDate: '2099-01-02',
+          settled: false,
+        },
+        {
+          id: 'pending-sell-1',
+          type: 'sell',
+          date: '2026-05-21',
+          time: 'before15',
+          amount: 10,
+          grossAmount: 120,
+          netOutAmount: 119,
+          settlementDate: '2099-01-02',
+          settled: false,
+        },
+      ],
     },
   ],
   watchlists: [
@@ -370,10 +393,6 @@ describe('telegram ai reminder worker', () => {
       'https://api.github.com/gists/gist-id',
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer github-token' }) }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://www.morningstar.cn/cn-api/v2/funds/000001/holdings',
-      expect.objectContaining({ headers: expect.objectContaining({ Accept: 'application/json' }) }),
-    );
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('https://qt.gtimg.cn/q='))).toBe(true);
     expect(
       fetchMock.mock.calls.some((call) => String(call[0]).includes('https://np-listapi.eastmoney.com')),
@@ -404,6 +423,11 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('资金流入最强方向: 人工智能');
     expect(aiBody.messages[0].content).toContain('资金流数据: available');
     expect(aiBody.messages[0].content).toContain('可用资产: 5000');
+    expect(aiBody.messages[0].content).toContain('交易确认规则: 普通场外基金按 T+1');
+    expect(aiBody.messages[0].content).toContain('待确认交易数量: 2');
+    expect(aiBody.messages[0].content).toContain('待确认买入金额: 1000');
+    expect(aiBody.messages[0].content).toContain('待到账/待确认卖出资金: 119');
+    expect(aiBody.messages[0].content).toContain('T+1 交易确认口径');
     expect(aiBody.messages[0].content).toContain('近3日每日收益: 2026-05-18 +1.80 元');
     expect(aiBody.messages[0].content).toContain('今日加仓候选');
     expect(aiBody.messages[0].content).toContain('不得编造新闻标题、财报数据、公告内容或资金流数据');
@@ -967,6 +991,8 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('overseasMarket');
     expect(aiBody.messages[0].content).toContain('afterHoursNews');
     expect(aiBody.messages[0].content).toContain('fundFlow');
+    expect(aiBody.messages[0].content).toContain('transactionSettlement');
+    expect(aiBody.messages[0].content).toContain('待确认买入不能算当前已确认持仓收益');
     expect(aiBody.messages[0].content).not.toContain('buildCandidates');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });

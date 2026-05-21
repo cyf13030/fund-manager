@@ -104,6 +104,27 @@ interface BackupFund {
   buyDate?: string;
   buyTime?: 'before15' | 'after15';
   settlementDays?: number;
+  pendingTransactions?: PendingTransactionSnapshot[];
+}
+
+interface PendingTransactionSnapshot {
+  id: string;
+  type: 'buy' | 'sell' | 'transferOut' | 'transferIn';
+  date: string;
+  time: 'before15' | 'after15';
+  amount: number;
+  settlementDate: string;
+  settled: boolean;
+  transferId?: string;
+  counterpartyFundCode?: string;
+  sellFeeRate?: number;
+  buyFeeRate?: number;
+  outShares?: number;
+  inShares?: number;
+  grossAmount?: number;
+  netOutAmount?: number;
+  netInAmount?: number;
+  settledNavDateUsed?: string;
 }
 
 interface BackupWatchlistItem {
@@ -307,6 +328,35 @@ interface HoldingsSnapshot {
   dataCoverage: HoldingsDataCoverage;
   dailyEarningsSummary?: DailyEarningsTrendSummary;
   investmentProfile?: InvestmentProfileSnapshot;
+  transactionSettlement: TransactionSettlementContext;
+}
+
+interface TransactionSettlementItem {
+  fundCode: string;
+  fundName: string;
+  type: PendingTransactionSnapshot['type'];
+  date: string;
+  time: PendingTransactionSnapshot['time'];
+  amount: number;
+  cashAmount: number | null;
+  shares: number | null;
+  settlementDate: string;
+  status: 'pendingConfirmation' | 'settlementDueOrOverdue';
+  impact: string;
+}
+
+interface TransactionSettlementContext {
+  asOf: string;
+  ruleSummary: string;
+  pendingCount: number;
+  settlementDueCount: number;
+  pendingBuyAmount: number;
+  pendingTransferInAmount: number;
+  pendingRedeemAmount: number;
+  pendingSellShares: number;
+  pendingTransferOutShares: number;
+  items: TransactionSettlementItem[];
+  notes: string[];
 }
 
 interface MarketIndexSnapshot {
@@ -2172,6 +2222,85 @@ const buildFallbackBuildCandidates = (
     .slice(0, 5);
 };
 
+const buildTransactionSettlementContext = (funds: BackupFund[]): TransactionSettlementContext => {
+  const today = getChinaDateString();
+  const items = funds.flatMap<TransactionSettlementItem>((fund) => {
+    return (fund.pendingTransactions || [])
+      .filter((transaction) => !transaction.settled)
+      .map((transaction) => {
+        const status = transaction.settlementDate <= today ? 'settlementDueOrOverdue' : 'pendingConfirmation';
+        const cashAmount =
+          transaction.type === 'buy'
+            ? transaction.amount
+            : transaction.type === 'transferIn'
+              ? transaction.netInAmount ?? transaction.amount
+              : transaction.netOutAmount ?? transaction.grossAmount ?? null;
+        const shares =
+          transaction.type === 'sell' || transaction.type === 'transferOut'
+            ? transaction.outShares ?? transaction.amount
+            : transaction.inShares ?? null;
+        const operationTime = transaction.time === 'before15' ? '15:00前' : '15:00后';
+        const typeLabel =
+          transaction.type === 'buy'
+            ? '买入'
+            : transaction.type === 'sell'
+              ? '卖出'
+              : transaction.type === 'transferIn'
+                ? '调入'
+                : '调出';
+
+        return {
+          fundCode: fund.code,
+          fundName: fund.name,
+          type: transaction.type,
+          date: transaction.date,
+          time: transaction.time,
+          amount: round(transaction.amount),
+          cashAmount: cashAmount === null ? null : round(cashAmount),
+          shares: shares === null ? null : round(shares, 4),
+          settlementDate: transaction.settlementDate,
+          status,
+          impact: `${typeLabel}${operationTime}，预计 ${transaction.settlementDate} 确认；确认前不要当作已确认仓位或可用现金`,
+        };
+      });
+  });
+
+  const pendingBuyAmount = items
+    .filter((item) => item.type === 'buy')
+    .reduce((sum, item) => sum + (item.cashAmount ?? 0), 0);
+  const pendingTransferInAmount = items
+    .filter((item) => item.type === 'transferIn')
+    .reduce((sum, item) => sum + (item.cashAmount ?? 0), 0);
+  const pendingRedeemAmount = items
+    .filter((item) => item.type === 'sell' || item.type === 'transferOut')
+    .reduce((sum, item) => sum + (item.cashAmount ?? 0), 0);
+  const pendingSellShares = items
+    .filter((item) => item.type === 'sell')
+    .reduce((sum, item) => sum + (item.shares ?? 0), 0);
+  const pendingTransferOutShares = items
+    .filter((item) => item.type === 'transferOut')
+    .reduce((sum, item) => sum + (item.shares ?? 0), 0);
+
+  return {
+    asOf: today,
+    ruleSummary:
+      '普通场外基金按 T+1 确认份额作为默认口径；15:00 后交易通常顺延到下一交易日净值，QDII/港股/跨境基金可能更慢。',
+    pendingCount: items.length,
+    settlementDueCount: items.filter((item) => item.status === 'settlementDueOrOverdue').length,
+    pendingBuyAmount: round(pendingBuyAmount),
+    pendingTransferInAmount: round(pendingTransferInAmount),
+    pendingRedeemAmount: round(pendingRedeemAmount),
+    pendingSellShares: round(pendingSellShares, 4),
+    pendingTransferOutShares: round(pendingTransferOutShares, 4),
+    items,
+    notes: [
+      '待确认买入只作为即将形成的风险暴露，不计入当前已确认持仓收益。',
+      '待确认卖出/调出在确认前仍可能承受净值波动，赎回或调出资金不要当作可立即使用现金。',
+      '若交易确认状态缺失或跨市场基金确认周期不明确，必须降低预测置信度。',
+    ],
+  };
+};
+
 const buildHoldingsSnapshot = async (
   payload: FundBackupPayload,
   options?: SnapshotBuildOptions,
@@ -2228,6 +2357,7 @@ const buildHoldingsSnapshot = async (
   const underlyingExposures = buildUnderlyingExposures(holdings, totalAssets);
   const riskRadar = buildPortfolioRiskRadar(holdings, totalAssets);
   const dailyEarningsSummary = buildDailyEarningsTrendSummary(payload.fundDailyEarnings);
+  const transactionSettlement = buildTransactionSettlementContext(payload.funds);
 
   return {
     asOf: payload.exportDate || new Date().toISOString(),
@@ -2251,6 +2381,7 @@ const buildHoldingsSnapshot = async (
     dataCoverage: buildHoldingsDataCoverage(holdings, payload.investmentProfile),
     dailyEarningsSummary,
     investmentProfile: payload.investmentProfile,
+    transactionSettlement,
   };
 };
 
@@ -2766,6 +2897,7 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
       holdingGainPct: holdings.holdingGainPct,
       availableAssets: holdings.availableAssets ?? null,
       dailyEarningsTrend: holdings.dailyEarningsSummary?.trendText ?? null,
+      transactionSettlement: holdings.transactionSettlement,
       quantSummary,
       highRiskItems: holdings.riskRadar.filter((item) => item.level === 'high').map((item) => item.label),
       mediumRiskItems: holdings.riskRadar.filter((item) => item.level === 'medium').map((item) => item.label),
@@ -2815,9 +2947,11 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
 3) 盘后消息面只可引用摘要中已有标题；新闻缺失或接口失败时必须说明，不得假设政策利好或利空。
 4) 资金流连续性只能基于 trendItems；trendItems 为空时必须说明连续性样本不足。
 5) 组合方向必须结合持仓底层暴露、近几日收益趋势、量化摘要和 A 股/外围市场共同判断。
-6) 必须输出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”。
-7) 不得写“必涨”“必跌”“一定”。不确定就降低置信度。
-8) 最终回复不得出现 dataStatus、trendItems、marketSnapshot、overseasMarketSnapshot、fundFlowSnapshot、holdings 等字段名，必须转成自然语言。
+6) 交易确认必须按 T+1 口径处理：待确认买入不能算当前已确认持仓收益；待确认卖出/调出资金不能算可立即使用现金；15:00 后交易需提示顺延风险。
+7) 如果存在待确认交易，必须单独说明它对明日判断的影响；如果交易确认状态不完整，必须降低置信度。
+8) 必须输出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”。
+9) 不得写“必涨”“必跌”“一定”。不确定就降低置信度。
+10) 最终回复不得出现 dataStatus、trendItems、marketSnapshot、overseasMarketSnapshot、fundFlowSnapshot、holdings 等字段名，必须转成自然语言。
 
 预测专用摘要：
 ${JSON.stringify(predictionContext)}`;
@@ -2840,16 +2974,24 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
 
   const modeInstruction =
     mode === 'risk'
-      ? '你是一位专注风险评估的基金持仓分析助手，请优先识别回撤、集中度、单市场暴露与组合脆弱点。'
+      ? '你是一位专注风险评估的基金持仓分析助手，请优先识别回撤、集中度、单市场暴露与组合脆弱点。必须按 T+1 交易确认口径区分已确认持仓、待确认交易和待到账资金。'
       : mode === 'quick'
-        ? '你是一位基金持仓分析助手，请用快速诊断方式先给关键结论，再补充依据。'
-        : '你是一位资深基金投顾，请从收益、配置、集中度、风险、改进建议等多个维度做深度分析。';
+        ? '你是一位基金持仓分析助手，请用快速诊断方式先给关键结论，再补充依据。必须按 T+1 交易确认口径区分已确认持仓、待确认交易和待到账资金。'
+        : '你是一位资深基金投顾，请从收益、配置、集中度、风险、改进建议等多个维度做深度分析。必须按 T+1 交易确认口径区分已确认持仓、待确认交易和待到账资金。';
 
   const summary = [
     `总资产: ${holdings.totalAssets}`,
     typeof holdings.availableAssets === 'number'
       ? `可用资产: ${holdings.availableAssets}`
       : '可用资产: missing',
+    `交易确认规则: ${holdings.transactionSettlement.ruleSummary}`,
+    `待确认交易数量: ${holdings.transactionSettlement.pendingCount}`,
+    `应确认/逾期待结算交易数量: ${holdings.transactionSettlement.settlementDueCount}`,
+    `待确认买入金额: ${holdings.transactionSettlement.pendingBuyAmount}`,
+    `待确认调入金额: ${holdings.transactionSettlement.pendingTransferInAmount}`,
+    `待到账/待确认卖出资金: ${holdings.transactionSettlement.pendingRedeemAmount}`,
+    `待确认卖出份额: ${holdings.transactionSettlement.pendingSellShares}`,
+    `待确认调出份额: ${holdings.transactionSettlement.pendingTransferOutShares}`,
     `持仓数量: ${holdings.holdings.length}`,
     `总收益: ${holdings.holdingGain} (${holdings.holdingGainPct}%)`,
     `日收益: ${holdings.totalDayGain} (${holdings.totalDayGainPct}%)`,
