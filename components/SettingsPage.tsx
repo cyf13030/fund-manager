@@ -4,7 +4,13 @@ import { SelectDropdown } from './SelectDropdown';
 import { useTranslation } from '../services/i18n';
 import { useTheme } from '../services/ThemeContext';
 import { useSettings } from '../services/SettingsContext';
-import { updateAutoGistTargetSnapshot } from '../services/gistAutoSync';
+import {
+  getAutoGistSyncStatus,
+  subscribeAutoGistSyncStatus,
+  syncNowWithAutoGist,
+  updateAutoGistTargetSnapshot,
+  type AutoGistSyncStatus,
+} from '../services/gistAutoSync';
 import {
   exportFunds,
   exportFundsToJsonString,
@@ -95,6 +101,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
   const [gistChooserOpen, setGistChooserOpen] = useState(false);
   const [gistChooserMode, setGistChooserMode] = useState<'download' | 'upload'>('download');
   const [syncBusy, setSyncBusy] = useState(false);
+  const [autoSyncStatus, setAutoSyncStatus] = useState<AutoGistSyncStatus>(() =>
+    getAutoGistSyncStatus(),
+  );
   const [gistListRefreshing, setGistListRefreshing] = useState(false);
   const [gistListCooldownSec, setGistListCooldownSec] = useState(0);
   const [selectedProviderId, setSelectedProviderId] = useState('');
@@ -106,6 +115,45 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
     if (provider === 'gemini') return geminiModels;
     return customOpenAiModels;
   };
+
+  const formatSyncTime = (value?: string) => {
+    if (!value) return '暂无';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '暂无';
+    return date.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const handleAutoGistSyncToggle = () => {
+    const nextValue = !autoGistSync;
+    setAutoGistSync(nextValue);
+
+    if (!nextValue) return;
+
+    if (!githubToken.trim()) {
+      alert('请先填写 GitHub Token。');
+      return;
+    }
+
+    if (!defaultGistTarget) {
+      setGistChooserMode('upload');
+      setGistChooserOpen(true);
+      alert('请先选择或创建默认 Gist 备份。');
+      return;
+    }
+
+    window.setTimeout(() => syncNowWithAutoGist(), 0);
+  };
+
+  useEffect(() => {
+    const refreshStatus = () => setAutoSyncStatus(getAutoGistSyncStatus());
+    refreshStatus();
+    return subscribeAutoGistSyncStatus(refreshStatus);
+  }, []);
 
   useEffect(() => {
     if (!providerItems.length) {
@@ -946,7 +994,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
             </div>
             <button
               type="button"
-              onClick={() => setAutoGistSync(!autoGistSync)}
+              onClick={handleAutoGistSyncToggle}
               className={`relative h-7 w-12 rounded-full transition-colors ${autoGistSync ? 'bg-gray-900 dark:bg-blue-500/20' : 'bg-gray-200 dark:bg-white/10'}`}
               aria-pressed={autoGistSync}
               aria-label="自动同步 Gist"
@@ -955,6 +1003,26 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
                 className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-transform ${autoGistSync ? 'translate-x-6' : 'translate-x-1'}`}
               />
             </button>
+          </div>
+
+          <div className="mt-3 rounded-2xl border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-4 py-3 text-sm text-[var(--app-shell-muted)]">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span>
+                状态：
+                {autoSyncStatus.syncing
+                  ? '同步中'
+                  : autoSyncStatus.dirty
+                    ? '待上传'
+                    : '已同步'}
+              </span>
+              <span>上次成功：{formatSyncTime(autoSyncStatus.lastSuccessAt)}</span>
+              <span>上次尝试：{formatSyncTime(autoSyncStatus.lastAttemptAt)}</span>
+            </div>
+            {autoSyncStatus.lastError && (
+              <div className="mt-2 text-xs font-medium text-red-500 dark:text-red-300">
+                自动同步失败：{autoSyncStatus.lastError}
+              </div>
+            )}
           </div>
 
           <div className="mt-3 flex items-center justify-between gap-4 rounded-2xl border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-4 py-3">

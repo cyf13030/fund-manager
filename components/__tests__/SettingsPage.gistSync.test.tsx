@@ -257,6 +257,19 @@ describe('SettingsPage gist sync integration', () => {
     expect(mockedDeps.overwriteSyncGist).toHaveBeenCalled();
   });
 
+  it('开启自动同步但没有默认 Gist 时打开上传目标选择器', async () => {
+    render(<SettingsPage />);
+    await waitFor(() => expect(mockedDeps.listSyncGists).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'common.gistSync' }));
+    fireEvent.click(await screen.findByRole('button', { name: '自动同步 Gist' }));
+
+    expect(mockedDeps.settings.setAutoGistSync).toHaveBeenCalledWith(true);
+    expect(chooserLastProps?.isOpen).toBe(true);
+    expect(chooserLastProps?.defaultMode).toBe('upload');
+    expect(window.alert).toHaveBeenCalledWith('请先选择或创建默认 Gist 备份。');
+  });
+
   it('为主视图与二级视图保留 fixed 头部顶部安全间距', async () => {
     const { container } = render(<SettingsPage />);
 

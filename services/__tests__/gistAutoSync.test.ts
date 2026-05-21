@@ -21,6 +21,7 @@ vi.mock('../gistSync/index', () => ({
 
 import {
   checkAutoGistSyncNow,
+  getAutoGistSyncStatus,
   syncNowWithAutoGist,
   updateAutoGistTargetSnapshot,
   withAutoGistSyncSuppressed,
@@ -69,6 +70,56 @@ describe('gistAutoSync', () => {
       content: '{"version":1}',
       description: '默认备份',
     });
+    expect(getAutoGistSyncStatus()).toMatchObject({
+      dirty: false,
+      lastError: undefined,
+    });
+  });
+
+  it('uploads persisted dirty changes on app startup check', async () => {
+    localStorage.setItem(
+      'app-settings-preference',
+      JSON.stringify({
+        autoGistSync: true,
+        githubToken: 'ghp_testtoken1234567890',
+        gistAutoSyncDirty: true,
+        defaultGistTarget: {
+          id: 'gist-1',
+          description: '默认备份',
+          updatedAt: '2026-03-20T00:00:00Z',
+          fileName: 'fund-manager-sync.json',
+        },
+      }),
+    );
+    mockedDeps.exportFundsToJsonString.mockResolvedValue('{"version":1}');
+    mockedDeps.overwriteSyncGist.mockResolvedValue({
+      id: 'gist-1',
+      description: '默认备份',
+      updated_at: '2026-03-21T00:00:00Z',
+      hasSyncFile: true,
+      files: {},
+    });
+
+    await checkAutoGistSyncNow();
+
+    expect(mockedDeps.exportFundsToJsonString).toHaveBeenCalledTimes(1);
+    expect(mockedDeps.overwriteSyncGist).toHaveBeenCalledTimes(1);
+    expect(getAutoGistSyncStatus().dirty).toBe(false);
+  });
+
+  it('records visible error when auto sync lacks default target', async () => {
+    localStorage.setItem(
+      'app-settings-preference',
+      JSON.stringify({
+        autoGistSync: true,
+        githubToken: 'ghp_testtoken1234567890',
+      }),
+    );
+
+    await checkAutoGistSyncNow();
+
+    expect(mockedDeps.exportFundsToJsonString).not.toHaveBeenCalled();
+    expect(getAutoGistSyncStatus().lastError).toBe('请先选择或创建默认 Gist 备份。');
   });
 
   it('checks remote gist and imports newer content immediately', async () => {
