@@ -324,6 +324,13 @@ interface MarketSnapshot {
   dataStatus: 'available' | 'partial' | 'missing';
 }
 
+interface OverseasMarketSnapshot {
+  asOf: string;
+  items: Array<MarketIndexSnapshot & { market: 'US' | 'HK' | 'FX' | 'COMMODITY' | 'FUTURES' }>;
+  dataStatus: 'available' | 'partial' | 'missing';
+  failedSources?: string[];
+}
+
 interface NewsItemSnapshot {
   title: string;
   source?: string;
@@ -337,6 +344,7 @@ interface NewsSnapshot {
   provider: 'eastmoney' | 'sina' | 'mixed';
   keywords: string[];
   lookbackHours: number;
+  session: 'general' | 'afterHours';
   items: NewsItemSnapshot[];
   dataStatus: 'available' | 'missing' | 'failed';
   failedSources?: string[];
@@ -371,11 +379,21 @@ interface FundFlowSnapshot {
   dataStatus: 'available' | 'partial' | 'missing' | 'failed';
   unavailableReason?: 'preMarketOrOffHours' | 'empty' | 'requestFailed';
   failedSources?: string[];
+  trendItems?: Array<{
+    name: string;
+    category: 'sector' | 'concept';
+    appearances: number;
+    latestRank: number;
+    previousRank?: number;
+    rankChange?: number;
+    latestNetInflow: number;
+  }>;
 }
 
 interface AnalysisContextSnapshot {
   holdings: HoldingsSnapshot;
   marketSnapshot?: MarketSnapshot;
+  overseasMarketSnapshot?: OverseasMarketSnapshot;
   newsSnapshot?: NewsSnapshot;
   fundFlowSnapshot?: FundFlowSnapshot;
 }
@@ -458,7 +476,7 @@ const MARKET_ANALYSIS_QUESTION =
 const UP_DOWN_REASON_QUESTION =
   '请只做今天涨跌归因分析，控制在 800 字以内。必须先判断当前是更偏上涨、下跌还是震荡，再分别说明“今天为什么涨/跌”的主要原因。结论必须基于 A 股市场、中文财经新闻、行业/概念资金流、当前持仓暴露和量化信号，不能只复述数据。请按“结论、上涨/下跌原因、当前信号、证据、不确定项”输出；如果数据不足，必须明确写出缺失项，不能编造原因。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
 const TOMORROW_PREDICTION_QUESTION =
-  '请只做明日涨跌预测，控制在 900 字以内。必须明确这是基于现有数据的条件化概率判断，不得写“必涨”“必跌”“一定”。请先给出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”；必须结合 A 股市场状态、中文财经新闻、行业/概念资金流、当前持仓底层暴露、近几日组合收益趋势和量化信号。请按“结论、概率判断、主要依据、明天重点看什么、触发条件、失效条件、不确定项”输出；如果市场、新闻、资金流、底层持仓或近几日收益数据缺失，必须明确说明并降低置信度，不能编造。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings、fundDailyEarnings、marketSnapshot 等内部字段名。';
+  '请只做明日涨跌预测，控制在 900 字以内。必须明确这是基于现有数据的条件化概率判断，不得写“必涨”“必跌”“一定”。请先给出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”；必须结合 A 股市场状态、外围市场/指数期货（美股、港股、A50、汇率、商品）、盘后消息面、行业/概念资金流连续性、当前持仓底层暴露、近几日组合收益趋势和量化信号。请按“结论、概率判断、主要依据、明天重点看什么、触发条件、失效条件、不确定项”输出；如果市场、外围市场、盘后新闻、资金流连续性、底层持仓或近几日收益数据缺失，必须明确说明并降低置信度，不能编造。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings、fundDailyEarnings、marketSnapshot、overseasMarketSnapshot 等内部字段名。';
 const DETAILED_ANALYSIS_QUESTION = DEFAULT_AI_QUESTION;
 const MIDDAY_ANALYSIS_QUESTION =
   '请输出午盘休息分析，控制在 1000 字以内。重点总结上午市场情绪、A 股指数强弱、资金流入最强方向、中文财经新闻利好/风险，并判断下午是否适合观察、低吸、小额试探或暂不操作。建仓主题观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合。如果没有明确主题，必须输出“午盘建仓主题观察”，给出 1-3 个下午观察方向和触发条件，不得硬写买入建议。午盘不做激进操作建议，不要建议清仓。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
@@ -543,6 +561,7 @@ const DEFAULT_MARKET_INDEX_CODES = [
   'sh000852',
   'sh000688',
 ];
+const DEFAULT_OVERSEAS_MARKET_CODES = ['usDJI', 'usINX', 'usIXIC', 'hkHSI', 'hkHSTECH', 'hf_CHA50CFD', 'USDCNH'];
 const MARKET_INDEX_NAMES: Record<string, string> = {
   sh000001: '上证指数',
   sz399001: '深证成指',
@@ -552,7 +571,15 @@ const MARKET_INDEX_NAMES: Record<string, string> = {
   sh000905: '中证500',
   sh000852: '中证1000',
   sh000688: '科创50',
+  usDJI: '道琼斯指数',
+  usINX: '标普500',
+  usIXIC: '纳斯达克指数',
+  hkHSI: '恒生指数',
+  hkHSTECH: '恒生科技',
+  hf_CHA50CFD: '富时中国A50期货',
+  USDCNH: '离岸人民币',
 };
+const fundFlowHistory: FundFlowItemSnapshot[][] = [];
 const FUND_FLOW_FALLBACK_CANDIDATES: Array<{
   keywords: string[];
   code: string;
@@ -1621,6 +1648,31 @@ const fetchEastMoneyFundFlowResult = async (
   return { items, unavailableValues: hasUnavailableEastMoneyFundFlowValues(response) };
 };
 
+const buildFundFlowTrendItems = (latestItems: FundFlowItemSnapshot[]): FundFlowSnapshot['trendItems'] => {
+  if (latestItems.length === 0) return undefined;
+
+  fundFlowHistory.push(latestItems.slice(0, 12));
+  while (fundFlowHistory.length > 5) fundFlowHistory.shift();
+
+  const trendItems = latestItems.slice(0, 8).map((item) => {
+    const ranks = fundFlowHistory
+      .map((snapshot) => snapshot.find((entry) => entry.name === item.name && entry.category === item.category)?.netInflowRank)
+      .filter((rank): rank is number => typeof rank === 'number');
+    const previousRank = ranks.length >= 2 ? ranks[ranks.length - 2] : undefined;
+    return {
+      name: item.name,
+      category: item.category,
+      appearances: ranks.length,
+      latestRank: item.netInflowRank,
+      previousRank,
+      rankChange: previousRank !== undefined ? previousRank - item.netInflowRank : undefined,
+      latestNetInflow: item.netInflow,
+    };
+  });
+
+  return trendItems.length > 0 ? trendItems : undefined;
+};
+
 const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undefined> => {
   if (!isEnabled(env.MARKET_ANALYSIS_ENABLED, true)) return undefined;
   const timeoutMs = Math.min(
@@ -1678,6 +1730,7 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
     asOf: new Date().toISOString(),
     provider: 'eastmoney',
     items: rankedItems,
+    trendItems: buildFundFlowTrendItems(rankedItems),
     dataStatus: failedSources.length > 0 ? 'partial' : 'available',
     failedSources: failedSources.length > 0 ? failedSources : undefined,
   };
@@ -1689,6 +1742,17 @@ const buildNewsKeywords = (holdings: HoldingsSnapshot) => {
     '政策',
     '财报',
     '公告',
+    '盘后',
+    '证监会',
+    '交易所',
+    '央行',
+    '回购',
+    '减持',
+    '美联储',
+    '人民币',
+    'A50',
+    '港股',
+    '美股',
     '业绩预告',
     '人工智能',
     '低碳',
@@ -1701,7 +1765,12 @@ const buildNewsKeywords = (holdings: HoldingsSnapshot) => {
       if (equity.sector?.trim()) keywords.add(equity.sector.trim());
     });
   });
-  return Array.from(keywords).slice(0, 18);
+  return Array.from(keywords).slice(0, 28);
+};
+
+const getNewsSession = (): NewsSnapshot['session'] => {
+  const phase = getChinaMarketPhase();
+  return phase === 'postClose' || phase === 'preMarket' ? 'afterHours' : 'general';
 };
 
 interface EastMoneyNewsItem {
@@ -1843,6 +1912,7 @@ const fetchNewsSnapshot = async (
     10000,
   );
   const keywords = buildNewsKeywords(holdings);
+  const session = getNewsSession();
   const items: NewsItemSnapshot[] = [];
   const failedSources: string[] = [];
 
@@ -1870,6 +1940,7 @@ const fetchNewsSnapshot = async (
       provider,
       keywords,
       lookbackHours,
+      session,
       items: [],
       dataStatus: 'failed',
       failedSources,
@@ -1881,6 +1952,7 @@ const fetchNewsSnapshot = async (
     provider,
     keywords,
     lookbackHours,
+    session,
     items: uniqueItems,
     dataStatus: uniqueItems.length > 0 ? 'available' : 'missing',
     failedSources: failedSources.length > 0 ? failedSources : undefined,
@@ -2142,6 +2214,42 @@ const buildHoldingsSnapshot = async (
   };
 };
 
+const resolveOverseasMarket = (code: string): OverseasMarketSnapshot['items'][number]['market'] => {
+  if (code.startsWith('us')) return 'US';
+  if (code.startsWith('hk')) return 'HK';
+  if (code.startsWith('hf_')) return 'FUTURES';
+  if (code.toUpperCase().includes('USD') || code.toUpperCase().includes('CNH')) return 'FX';
+  return 'COMMODITY';
+};
+
+const fetchOverseasMarketSnapshot = async (env: Env): Promise<OverseasMarketSnapshot | undefined> => {
+  if (!isEnabled(env.MARKET_ANALYSIS_ENABLED, true)) return undefined;
+  const codes = DEFAULT_OVERSEAS_MARKET_CODES;
+
+  try {
+    const text = await fetchText(`${TENCENT_QUOTE_API}${codes.join(',')}`, {}, '读取外围市场与指数期货');
+    const items = text
+      .split(';')
+      .map(parseTencentMarketLine)
+      .filter((item): item is MarketIndexSnapshot => Boolean(item))
+      .map((item) => ({ ...item, market: resolveOverseasMarket(item.code) }));
+    return {
+      asOf: new Date().toISOString(),
+      items,
+      dataStatus: items.length === 0 ? 'missing' : items.length === codes.length ? 'available' : 'partial',
+      failedSources: items.length === codes.length ? undefined : ['tencent-overseas-market'],
+    };
+  } catch (error) {
+    console.warn('读取外围市场与指数期货失败', error);
+    return {
+      asOf: new Date().toISOString(),
+      items: [],
+      dataStatus: 'missing',
+      failedSources: ['tencent-overseas-market'],
+    };
+  }
+};
+
 const buildPortfolioQuantSummary = (holdings: HoldingSnapshotItem[], totalAssets: number) => {
   const available = holdings.filter((item) => item.quantSignal?.dataStatus === 'available');
   const availableAssets = available.reduce((sum, item) => sum + item.marketValue, 0);
@@ -2245,7 +2353,7 @@ const buildPortfolioRiskRadar = (holdings: HoldingSnapshotItem[], totalAssets: n
 };
 
 const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: string) => {
-  const { holdings, marketSnapshot, newsSnapshot, fundFlowSnapshot } = context;
+  const { holdings, marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot } = context;
   const sortedByGain = [...holdings.holdings].sort((a, b) => b.totalGainPct - a.totalGainPct);
   const sortedByValue = [...holdings.holdings].sort((a, b) => b.marketValue - a.marketValue);
   const topGain = sortedByGain[0];
@@ -2299,11 +2407,25 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
     `资金流兜底建仓候选数量: ${holdings.fallbackBuildCandidates.length}`,
     `当前A股阶段: ${CHINA_MARKET_PHASE_LABELS[marketPhase]} (${marketPhase})`,
     `A股市场数据: ${marketSnapshot?.dataStatus ?? 'missing'}`,
+    `外围市场/指数期货数据: ${overseasMarketSnapshot?.dataStatus ?? 'missing'}`,
+    overseasMarketSnapshot?.items[0]
+      ? `外围市场代表信号: ${overseasMarketSnapshot.items
+          .slice(0, 5)
+          .map((item) => `${item.name}${item.changePct >= 0 ? '+' : ''}${item.changePct}%`)
+          .join('、')}`
+      : '',
     `消息面/财报/公告数据: ${newsSnapshot?.dataStatus ?? 'missing'}`,
+    `消息面时段: ${newsSnapshot?.session ?? 'missing'}`,
     `资金流数据: ${fundFlowSnapshot?.dataStatus ?? 'missing'}`,
     fundFlowSnapshot?.items[0]
       ? `资金流入最强方向: ${fundFlowSnapshot.items[0].name} (${fundFlowSnapshot.items[0].netInflow})`
       : '',
+    fundFlowSnapshot?.trendItems?.[0]
+      ? `资金流连续性较强方向: ${fundFlowSnapshot.trendItems
+          .slice(0, 5)
+          .map((item) => `${item.name} 上榜${item.appearances}次 排名${item.latestRank}`)
+          .join('、')}`
+      : '资金流连续性数据: missing',
   ]
     .filter(Boolean)
     .join('\n');
@@ -2731,8 +2853,9 @@ const buildAnalysisMessage = async (
   logStepDuration('构建持仓快照', snapshotStartedAt);
 
   const externalStartedAt = Date.now();
-  const [marketSnapshot, newsSnapshot, fundFlowSnapshot] = await Promise.all([
+  const [marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot] = await Promise.all([
     fetchMarketSnapshot(env),
+    fetchOverseasMarketSnapshot(env),
     fetchNewsSnapshot(env, snapshot),
     fetchFundFlowSnapshot(env),
   ]);
@@ -2745,7 +2868,7 @@ const buildAnalysisMessage = async (
   const aiStartedAt = Date.now();
   const analysis = await analyzeHoldings(
     env,
-    { holdings: snapshotWithFallback, marketSnapshot, newsSnapshot, fundFlowSnapshot },
+    { holdings: snapshotWithFallback, marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot },
     options?.question,
   );
   logStepDuration('AI 分析', aiStartedAt);

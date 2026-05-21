@@ -903,6 +903,9 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('条件化概率判断');
     expect(aiBody.messages[1].content).toContain('结论、概率判断、主要依据、明天重点看什么、触发条件、失效条件、不确定项');
     expect(aiBody.messages[1].content).toContain('不得写“必涨”“必跌”“一定”');
+    expect(aiBody.messages[1].content).toContain('外围市场/指数期货');
+    expect(aiBody.messages[1].content).toContain('盘后消息面');
+    expect(aiBody.messages[1].content).toContain('资金流连续性');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
 
