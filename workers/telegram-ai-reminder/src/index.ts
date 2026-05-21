@@ -621,7 +621,13 @@ const FUND_FLOW_FALLBACK_CANDIDATES: Array<{
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Cache-Control': 'no-store',
+    },
   });
 
 const requireEnv = (env: Env, key: keyof Env): string => {
@@ -1736,7 +1742,7 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
   };
 };
 
-const buildNewsKeywords = (holdings: HoldingsSnapshot) => {
+const buildNewsKeywords = (holdings?: HoldingsSnapshot) => {
   const keywords = new Set<string>([
     'A股',
     '政策',
@@ -1758,8 +1764,8 @@ const buildNewsKeywords = (holdings: HoldingsSnapshot) => {
     '低碳',
     '新能源',
   ]);
-  holdings.holdings.slice(0, 5).forEach((fund) => keywords.add(fund.name));
-  holdings.holdings.forEach((fund) => {
+  holdings?.holdings.slice(0, 5).forEach((fund) => keywords.add(fund.name));
+  holdings?.holdings.forEach((fund) => {
     fund.topEquityHoldings?.slice(0, 5).forEach((equity) => {
       if (equity.name.trim()) keywords.add(equity.name.trim());
       if (equity.sector?.trim()) keywords.add(equity.sector.trim());
@@ -1896,7 +1902,7 @@ const fetchSinaNews = async (
 
 const fetchNewsSnapshot = async (
   env: Env,
-  holdings: HoldingsSnapshot,
+  holdings?: HoldingsSnapshot,
 ): Promise<NewsSnapshot | undefined> => {
   if (!isEnabled(env.NEWS_ANALYSIS_ENABLED, true)) return undefined;
   const configuredProvider = env.NEWS_PROVIDER || 'mixed';
@@ -2211,6 +2217,241 @@ const buildHoldingsSnapshot = async (
     dataCoverage: buildHoldingsDataCoverage(holdings, payload.investmentProfile),
     dailyEarningsSummary,
     investmentProfile: payload.investmentProfile,
+  };
+};
+
+type PublicNewsSummaryTone = 'positive' | 'negative' | 'neutral' | 'warning' | 'info';
+
+interface PublicNewsSummaryCard {
+  title: string;
+  value: string;
+  note: string;
+  tone: PublicNewsSummaryTone;
+}
+
+interface PublicNewsSummaryInsight {
+  tag: string;
+  title: string;
+  impact: string;
+  relation: string;
+  time: string;
+  tone: PublicNewsSummaryTone;
+}
+
+interface PublicNewsSummarySection {
+  title: string;
+  description: string;
+  items: PublicNewsSummaryInsight[];
+}
+
+interface PublicNewsSummaryResponse {
+  ok: true;
+  generatedAt: string;
+  marketPhase: string;
+  summaryLine: string;
+  cards: PublicNewsSummaryCard[];
+  sections: PublicNewsSummarySection[];
+  sourceStatus: Array<{ label: string; value: string; tone: PublicNewsSummaryTone }>;
+}
+
+const createPublicNewsInsightTone = (text: string): PublicNewsSummaryTone => {
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes('利好') ||
+    normalized.includes('回购') ||
+    normalized.includes('增持') ||
+    normalized.includes('上调') ||
+    normalized.includes('增长') ||
+    normalized.includes('创新高')
+  ) {
+    return 'positive';
+  }
+  if (
+    normalized.includes('减持') ||
+    normalized.includes('监管') ||
+    normalized.includes('下调') ||
+    normalized.includes('暴雷') ||
+    normalized.includes('处罚') ||
+    normalized.includes('回落') ||
+    normalized.includes('下跌')
+  ) {
+    return 'negative';
+  }
+  if (normalized.includes('风险') || normalized.includes('分歧')) return 'warning';
+  return 'neutral';
+};
+
+const formatPublicChangePct = (value: number) => `${value >= 0 ? '+' : ''}${round(value).toFixed(2)}%`;
+
+const formatPublicTime = (value: string | undefined) => {
+  if (!value) return '刚刚';
+  const parsed = Date.parse(value.replace(/-/g, '/'));
+  if (!Number.isFinite(parsed)) return value;
+  return new Date(parsed).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+};
+
+const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryResponse> => {
+  const [marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot] = await Promise.all([
+    fetchMarketSnapshot(env),
+    fetchOverseasMarketSnapshot(env),
+    fetchNewsSnapshot(env),
+    fetchFundFlowSnapshot(env),
+  ]);
+
+  const marketIndices = marketSnapshot?.indices ?? [];
+  const overseasItems = overseasMarketSnapshot?.items ?? [];
+  const newsItems = newsSnapshot?.items ?? [];
+  const fundFlowItems = fundFlowSnapshot?.items ?? [];
+  const trendItems = fundFlowSnapshot?.trendItems ?? [];
+  const marketPhase = getChinaMarketPhase();
+
+  const topMarketAverage =
+    marketIndices.length > 0
+      ? round(marketIndices.slice(0, 4).reduce((sum, item) => sum + item.changePct, 0) / Math.min(4, marketIndices.length))
+      : 0;
+  const overseasAverage =
+    overseasItems.length > 0
+      ? round(overseasItems.slice(0, 4).reduce((sum, item) => sum + item.changePct, 0) / Math.min(4, overseasItems.length))
+      : 0;
+  const positiveNewsCount = newsItems.filter((item) => createPublicNewsInsightTone(item.title) === 'positive').length;
+  const negativeNewsCount = newsItems.filter((item) => createPublicNewsInsightTone(item.title) === 'negative').length;
+  const topFlowItem = fundFlowItems[0];
+  const topTrendItem = trendItems[0];
+
+  const summaryLine = [
+    marketIndices[0] ? `${marketIndices[0].name}${formatPublicChangePct(marketIndices[0].changePct)}` : 'A 股指数暂无数据',
+    overseasItems[0] ? `外围${overseasItems[0].name}${formatPublicChangePct(overseasItems[0].changePct)}` : '外围市场暂无数据',
+    topFlowItem ? `资金流${topFlowItem.name}` : '资金流暂无数据',
+  ].join(' · ');
+
+  const cards: PublicNewsSummaryCard[] = [
+    {
+      title: '市场温度',
+      value: marketIndices.length > 0 ? (topMarketAverage >= 0.5 ? '偏强' : topMarketAverage <= -0.5 ? '偏弱' : '中性') : '暂无数据',
+      note:
+        marketIndices.length > 0
+          ? `${marketIndices[0].name} ${formatPublicChangePct(marketIndices[0].changePct)}，均值 ${formatPublicChangePct(topMarketAverage)}`
+          : 'A 股指数快照暂不可用',
+      tone: marketIndices.length > 0 ? (topMarketAverage >= 0.5 ? 'positive' : topMarketAverage <= -0.5 ? 'negative' : 'neutral') : 'neutral',
+    },
+    {
+      title: '盘后消息',
+      value: newsSnapshot ? `${positiveNewsCount} 正 / ${negativeNewsCount} 风险` : '暂无数据',
+      note:
+        newsSnapshot?.dataStatus === 'available'
+          ? `${newsSnapshot.session === 'afterHours' ? '盘后' : '盘中'}消息已抓取 ${newsItems.length} 条`
+          : '中文财经新闻当前不可用',
+      tone: positiveNewsCount >= negativeNewsCount ? 'positive' : 'warning',
+    },
+    {
+      title: '外围市场',
+      value:
+        overseasItems.length > 0
+          ? `${overseasItems[0].name}${formatPublicChangePct(overseasItems[0].changePct)}`
+          : '暂无数据',
+      note:
+        overseasItems.length > 0
+          ? `${overseasItems[0].market === 'US' ? '美股' : overseasItems[0].market === 'HK' ? '港股' : '海外'}带来开盘扰动参考，均值 ${formatPublicChangePct(overseasAverage)}`
+          : '外围行情暂不可用',
+      tone: overseasAverage >= 0.5 ? 'positive' : overseasAverage <= -0.5 ? 'negative' : 'info',
+    },
+    {
+      title: '资金流',
+      value: topFlowItem ? topFlowItem.name : '暂无数据',
+      note: topTrendItem
+        ? `${topTrendItem.name} 连续上榜 ${topTrendItem.appearances} 次`
+        : fundFlowSnapshot?.dataStatus === 'missing'
+          ? '资金流尚未形成或当前非交易时段'
+          : '主力资金方向暂不可用',
+      tone: topTrendItem ? 'warning' : 'neutral',
+    },
+  ];
+
+  const sections: PublicNewsSummarySection[] = [
+    {
+      title: 'A 股指数',
+      description: '主要指数的即时强弱，用来判断今天情绪底色。',
+      items: marketIndices.slice(0, 4).map((item) => ({
+        tag: '指数',
+        title: `${item.name} ${formatPublicChangePct(item.changePct)}`,
+        impact: item.changePct >= 0.5 ? '偏正面' : item.changePct <= -0.5 ? '偏负面' : '中性',
+        relation: '用于判断盘面方向，不直接等于持仓涨跌。',
+        time: formatPublicTime(item.updateTime),
+        tone: item.changePct >= 0.5 ? 'positive' : item.changePct <= -0.5 ? 'negative' : 'neutral',
+      })),
+    },
+    {
+      title: '盘后消息',
+      description: '政策、财报、公告和风险新闻，按影响方向整理。',
+      items: newsItems.slice(0, 6).map((item) => {
+        const tone = createPublicNewsInsightTone(item.title);
+        return {
+          tag: item.source || '新闻',
+          title: item.title,
+          impact: tone === 'positive' ? '偏正面' : tone === 'negative' ? '偏负面' : tone === 'warning' ? '需观察' : '中性',
+          relation: '用于筛选对市场情绪可能有影响的消息。',
+          time: formatPublicTime(item.publishedAt),
+          tone,
+        };
+      }),
+    },
+    {
+      title: '资金流',
+      description: '主题热度和连续性，用来判断资金是否延续。',
+      items: fundFlowItems.slice(0, 6).map((item) => ({
+        tag: item.category === 'sector' ? '行业' : '概念',
+        title: `${item.name} ${formatMoney(item.netInflow)}`,
+        impact: item.netInflow >= 0 ? '偏正面' : '偏负面',
+        relation: item.code ? `代码 ${item.code}` : '无代码信息，按方向观察。',
+        time: formatPublicTime(fundFlowSnapshot?.asOf),
+        tone: item.netInflow >= 0 ? 'warning' : 'negative',
+      })),
+    },
+    {
+      title: '外围市场',
+      description: '美股、港股、A50、汇率等对次日开盘的扰动。',
+      items: overseasItems.slice(0, 6).map((item) => ({
+        tag: item.market,
+        title: `${item.name} ${formatPublicChangePct(item.changePct)}`,
+        impact: item.changePct >= 0.5 ? '偏正面' : item.changePct <= -0.5 ? '偏负面' : '中性',
+        relation: '主要作为明早开盘情绪参考。',
+        time: formatPublicTime(item.updateTime),
+        tone: item.changePct >= 0.5 ? 'positive' : item.changePct <= -0.5 ? 'negative' : 'neutral',
+      })),
+    },
+  ];
+
+  const sourceStatus = [
+    {
+      label: 'A股指数',
+      value: marketSnapshot?.dataStatus ?? 'missing',
+      tone: marketSnapshot?.dataStatus === 'available' ? 'positive' : marketSnapshot?.dataStatus === 'partial' ? 'warning' : 'neutral',
+    },
+    {
+      label: '外围市场',
+      value: overseasMarketSnapshot?.dataStatus ?? 'missing',
+      tone: overseasMarketSnapshot?.dataStatus === 'available' ? 'positive' : overseasMarketSnapshot?.dataStatus === 'partial' ? 'warning' : 'neutral',
+    },
+    {
+      label: '盘后消息',
+      value: newsSnapshot?.dataStatus ?? 'missing',
+      tone: newsSnapshot?.dataStatus === 'available' ? 'positive' : newsSnapshot?.dataStatus === 'failed' ? 'negative' : 'warning',
+    },
+    {
+      label: '资金流',
+      value: fundFlowSnapshot?.dataStatus ?? 'missing',
+      tone: fundFlowSnapshot?.dataStatus === 'available' ? 'positive' : fundFlowSnapshot?.dataStatus === 'partial' ? 'warning' : 'neutral',
+    },
+  ] satisfies PublicNewsSummaryResponse['sourceStatus'];
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    marketPhase,
+    summaryLine,
+    cards,
+    sections,
+    sourceStatus,
   };
 };
 
@@ -3390,6 +3631,17 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/health') {
       return json({ ok: true, service: 'telegram-ai-reminder' });
+    }
+
+    if (url.pathname === '/news-summary' && request.method === 'GET') {
+      try {
+        return json(await buildPublicNewsSummary(env));
+      } catch (error) {
+        return json(
+          { ok: false, error: error instanceof Error ? error.message : '未知错误' },
+          500,
+        );
+      }
     }
 
     if (url.pathname === '/telegram' && request.method === 'POST') {

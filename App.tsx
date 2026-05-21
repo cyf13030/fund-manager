@@ -23,6 +23,7 @@ const SettingsPage = lazy(() =>
 const ServicesPanel = lazy(() =>
   import('./components/ServicesPanel').then((m) => ({ default: m.ServicesPanel })),
 );
+const NewsPage = lazy(() => import('./components/NewsPage').then((m) => ({ default: m.NewsPage })));
 const ScannerModal = lazy(() =>
   import('./components/ScannerModal').then((m) => ({ default: m.ScannerModal })),
 );
@@ -68,6 +69,12 @@ const AppContent: React.FC = () => {
         return (
           <Suspense fallback={null}>
             <ServicesPanel />
+          </Suspense>
+        );
+      case 'news':
+        return (
+          <Suspense fallback={null}>
+            <NewsPage />
           </Suspense>
         );
       default:

@@ -291,6 +291,30 @@ describe('telegram ai reminder worker', () => {
     vi.unstubAllGlobals();
   });
 
+  it('news-summary endpoint returns structured public insight data', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    const body = (await response.json()) as {
+      ok: boolean;
+      summaryLine: string;
+      cards: Array<{ title: string; value: string }>;
+      sections: Array<{ title: string; items: unknown[] }>;
+      sourceStatus: Array<{ label: string; value: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(body.ok).toBe(true);
+    expect(body.summaryLine).toContain('上证指数');
+    expect(body.cards[0].title).toBe('市场温度');
+    expect(body.cards.some((card) => card.title === '资金流')).toBe(true);
+    expect(body.sections.some((section) => section.title === '盘后消息')).toBe(true);
+    expect(body.sourceStatus.some((item) => item.label === '盘后消息')).toBe(true);
+  });
+
   it('读取 Gist 持仓、调用 AI 并发送 Telegram', async () => {
     const fetchMock = vi.fn();
     mockBaseSuccessfulFetches(fetchMock);
