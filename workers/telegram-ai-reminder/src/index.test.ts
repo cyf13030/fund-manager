@@ -2,7 +2,7 @@
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha2.js';
 
-import worker from './index';
+import worker, { __resetTelegramAiReminderStateForTests } from './index';
 
 ed.hashes.sha512 = (...messages) => sha512(ed.etc.concatBytes(...messages));
 
@@ -184,6 +184,11 @@ const unavailableEastMoneyFundFlowPayload = {
     ],
   },
 };
+const emptyEastMoneyFundFlowPayload = {
+  data: {
+    diff: [],
+  },
+};
 
 const env = {
   TELEGRAM_BOT_TOKEN: 'telegram-token',
@@ -318,6 +323,7 @@ const buildSignedQqRequest = async (body: unknown, secret = qqEnv.QQ_OFFICIAL_AP
 describe('telegram ai reminder worker', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    __resetTelegramAiReminderStateForTests();
   });
 
   it('news-summary endpoint returns structured public insight data', async () => {
@@ -371,6 +377,55 @@ describe('telegram ai reminder worker', () => {
     expect(synonymNews?.relatedToPortfolio).toBe(true);
     expect(synonymNews?.relationReason).toContain('来源：新能源');
     expect(body.sourceStatus.some((item) => item.label === '盘后消息')).toBe(true);
+  });
+
+  it('资金流空数据时会沿用最近可用主力方向', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await worker.fetch(new Request('https://worker.example/news-summary'), env);
+
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: {
+              'fund-manager-sync.json': {
+                content: JSON.stringify(backupPayload),
+              },
+            },
+          }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+        return Promise.resolve(jsonResponse(emptyEastMoneyFundFlowPayload));
+      }
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('chat/completions')) {
+        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '组合整体表现良好。' } }] }));
+      }
+      if (url.includes('generativelanguage.googleapis.com')) {
+        return Promise.resolve(jsonResponse({ candidates: [{ content: { parts: [{ text: 'Gemini 分析' }] } }] }));
+      }
+      return Promise.reject(new Error(`Unexpected fetch ${url}`));
+    });
+
+    const response = await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    const body = (await response.json()) as {
+      cards: Array<{ title: string; value: string; note: string }>;
+      sourceStatus: Array<{ label: string; value: string }>;
+    };
+
+    const fundFlowCard = body.cards.find((card) => card.title === '资金流');
+    expect(fundFlowCard?.value).not.toBe('暂无数据');
+    expect(fundFlowCard?.note).toContain('沿用最近可用主力方向');
+    expect(body.sourceStatus.find((item) => item.label === '资金流')?.value).toBe('cached');
   });
 
   it('读取 Gist 持仓、调用 AI 并发送 Telegram', async () => {

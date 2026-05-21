@@ -433,7 +433,7 @@ interface FundFlowSnapshot {
   provider: 'eastmoney';
   items: FundFlowItemSnapshot[];
   dataStatus: 'available' | 'partial' | 'missing' | 'failed';
-  unavailableReason?: 'preMarketOrOffHours' | 'empty' | 'requestFailed';
+  unavailableReason?: 'preMarketOrOffHours' | 'empty' | 'requestFailed' | 'cachedFallback';
   failedSources?: string[];
   trendItems?: Array<{
     name: string;
@@ -661,6 +661,7 @@ const MARKET_INDEX_NAMES: Record<string, string> = {
   USDCNH: '离岸人民币',
 };
 const fundFlowHistory: FundFlowItemSnapshot[][] = [];
+let cachedFundFlowSnapshot: FundFlowSnapshot | undefined;
 const FUND_FLOW_FALLBACK_CANDIDATES: Array<{
   keywords: string[];
   code: string;
@@ -1819,7 +1820,31 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
     .slice(0, 12)
     .map((item, index) => ({ ...item, netInflowRank: index + 1 }));
 
+  if (rankedItems.length > 0) {
+    const snapshot: FundFlowSnapshot = {
+      asOf: new Date().toISOString(),
+      provider: 'eastmoney',
+      items: rankedItems,
+      trendItems: buildFundFlowTrendItems(rankedItems),
+      dataStatus: failedSources.length > 0 ? 'partial' : 'available',
+      failedSources: failedSources.length > 0 ? failedSources : undefined,
+    };
+    cachedFundFlowSnapshot = snapshot;
+    return snapshot;
+  }
+
+  const cachedSnapshot = cachedFundFlowSnapshot;
+  const isCacheFresh = cachedSnapshot && Date.now() - Date.parse(cachedSnapshot.asOf) <= 12 * 60 * 60 * 1000;
+  const marketPhase = getChinaMarketPhase();
+
   if (rankedItems.length === 0 && failedSources.length > 0) {
+    if (cachedSnapshot && isCacheFresh) {
+      return {
+        ...cachedSnapshot,
+        unavailableReason: 'cachedFallback',
+      };
+    }
+
     return {
       asOf: new Date().toISOString(),
       provider: 'eastmoney',
@@ -1831,24 +1856,22 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
   }
 
   if (rankedItems.length === 0) {
+    if (cachedSnapshot && isCacheFresh) {
+      return {
+        ...cachedSnapshot,
+        unavailableReason: 'cachedFallback',
+      };
+    }
+
     return {
       asOf: new Date().toISOString(),
       provider: 'eastmoney',
       items: [],
       dataStatus: 'missing',
-      unavailableReason: hasUnavailableValues ? 'preMarketOrOffHours' : 'empty',
+      unavailableReason: marketPhase === 'preMarket' || marketPhase === 'postClose' ? 'preMarketOrOffHours' : hasUnavailableValues ? 'preMarketOrOffHours' : 'empty',
       failedSources: failedSources.length > 0 ? failedSources : undefined,
     };
   }
-
-  return {
-    asOf: new Date().toISOString(),
-    provider: 'eastmoney',
-    items: rankedItems,
-    trendItems: buildFundFlowTrendItems(rankedItems),
-    dataStatus: failedSources.length > 0 ? 'partial' : 'available',
-    failedSources: failedSources.length > 0 ? failedSources : undefined,
-  };
 };
 
 const buildNewsKeywords = (holdings?: HoldingsSnapshot) => {
@@ -2764,11 +2787,15 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
     {
       title: '资金流',
       value: topFlowItem ? topFlowItem.name : '暂无数据',
-      note: topTrendItem
-        ? `${topTrendItem.name} 连续上榜 ${topTrendItem.appearances} 次`
-        : fundFlowSnapshot?.dataStatus === 'missing'
-          ? '资金流尚未形成或当前非交易时段'
-          : '主力资金方向暂不可用',
+      note: fundFlowSnapshot?.unavailableReason === 'cachedFallback' && topTrendItem
+        ? `${topTrendItem.name} 连续上榜 ${topTrendItem.appearances} 次，盘后沿用最近可用主力方向`
+        : topTrendItem
+          ? `${topTrendItem.name} 连续上榜 ${topTrendItem.appearances} 次`
+          : fundFlowSnapshot?.dataStatus === 'missing'
+            ? '资金流尚未形成或当前非交易时段'
+            : fundFlowSnapshot?.unavailableReason === 'cachedFallback'
+              ? '盘后沿用最近可用主力方向，当前东财结果暂空'
+              : '主力资金方向暂不可用',
       tone: topTrendItem ? 'warning' : 'neutral',
     },
     {
@@ -2874,8 +2901,15 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
     },
     {
       label: '资金流',
-      value: fundFlowSnapshot?.dataStatus ?? 'missing',
-      tone: fundFlowSnapshot?.dataStatus === 'available' ? 'positive' : fundFlowSnapshot?.dataStatus === 'partial' ? 'warning' : 'neutral',
+      value: fundFlowSnapshot?.unavailableReason === 'cachedFallback' ? 'cached' : fundFlowSnapshot?.dataStatus ?? 'missing',
+      tone:
+        fundFlowSnapshot?.unavailableReason === 'cachedFallback'
+          ? 'warning'
+          : fundFlowSnapshot?.dataStatus === 'available'
+            ? 'positive'
+            : fundFlowSnapshot?.dataStatus === 'partial'
+              ? 'warning'
+              : 'neutral',
     },
   ] satisfies PublicNewsSummaryResponse['sourceStatus'];
 
@@ -4185,4 +4219,9 @@ export default {
       }),
     );
   },
+};
+
+export const __resetTelegramAiReminderStateForTests = () => {
+  fundFlowHistory.length = 0;
+  cachedFundFlowSnapshot = undefined;
 };
