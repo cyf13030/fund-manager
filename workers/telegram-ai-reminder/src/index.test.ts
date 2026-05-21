@@ -14,6 +14,16 @@ const backupPayload = {
     investmentHorizon: '3-5年',
     externalAssets: '现金 5 万',
   },
+  availableAssets: 5000,
+  fundDailyEarnings: {
+    all: {
+      '000001': [
+        { date: '2026-05-16', earnings: 0.9, rate: 0.75 },
+        { date: '2026-05-17', earnings: 1.2, rate: 1 },
+        { date: '2026-05-18', earnings: 1.8, rate: 1.52 },
+      ],
+    },
+  },
   funds: [
     {
       code: '000001',
@@ -334,9 +344,10 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('严禁仅凭基金名称判断当前组合持有什么主题');
     expect(aiBody.messages[0].content).toContain('如果只是市场资金流主题，必须明确是“市场观察主题”');
     expect(aiBody.messages[0].content).toContain('上证指数');
-    expect(aiBody.messages[0].content).toContain('A股人工智能板块午后走强');
     expect(aiBody.messages[0].content).toContain('资金流入最强方向: 人工智能');
     expect(aiBody.messages[0].content).toContain('资金流数据: available');
+    expect(aiBody.messages[0].content).toContain('可用资产: 5000');
+    expect(aiBody.messages[0].content).toContain('近3日每日收益: 2026-05-18 +1.80 元');
     expect(aiBody.messages[0].content).toContain('今日加仓候选');
     expect(aiBody.messages[0].content).toContain('不得编造新闻标题、财报数据、公告内容或资金流数据');
     expect(aiBody.messages[0].content).toContain('不要编造不存在的数据');
@@ -814,6 +825,8 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('结论、加仓、减仓/清仓、建仓主题、风险、数据');
     expect(aiBody.messages[1].content).toContain('风险只列 1-2 个最大风险');
     expect(aiBody.messages[1].content).toContain('数据行简要标注市场、资金流、新闻、量化、底层持仓');
+    expect(aiBody.messages[0].content).toContain('可用资产: 5000');
+    expect(aiBody.messages[0].content).toContain('近3日每日收益');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
 

@@ -57,6 +57,8 @@ interface FundBackupPayload {
   funds: BackupFund[];
   watchlists?: BackupWatchlistItem[];
   investmentProfile?: InvestmentProfileSnapshot;
+  availableAssets?: number;
+  fundDailyEarnings?: FundDailyEarningsScopedMap;
 }
 
 interface InvestmentProfileSnapshot {
@@ -64,6 +66,25 @@ interface InvestmentProfileSnapshot {
   investmentHorizon?: string;
   externalAssets?: string;
   notes?: string;
+}
+
+interface DailyEarningsPoint {
+  date: string;
+  earnings: number;
+  rate?: number | null;
+  baseCostAmount?: number | null;
+}
+
+type FundDailyEarningsScopedMap = Record<string, Record<string, DailyEarningsPoint[]>>;
+
+interface DailyEarningsTrendSummary {
+  scope: string;
+  latestDate: string | null;
+  latestEarnings: number | null;
+  previousDate: string | null;
+  previousEarnings: number | null;
+  recentPoints: Array<{ date: string; earnings: number }>;
+  trendText: string | null;
 }
 
 interface BackupFund {
@@ -270,6 +291,7 @@ interface HoldingsSnapshot {
   asOf: string;
   currency: string;
   totalAssets: number;
+  availableAssets?: number;
   totalDayGain: number;
   totalDayGainPct: number;
   holdingGain: number;
@@ -283,6 +305,7 @@ interface HoldingsSnapshot {
   quantSignals: FundQuantSignalSnapshot[];
   riskRadar: PortfolioRiskRadarItem[];
   dataCoverage: HoldingsDataCoverage;
+  dailyEarningsSummary?: DailyEarningsTrendSummary;
   investmentProfile?: InvestmentProfileSnapshot;
 }
 
@@ -580,6 +603,67 @@ const requireEnv = (env: Env, key: keyof Env): string => {
 const round = (value: number, digits = 2) => Number(value.toFixed(digits));
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const isNonEmptyObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isDailyEarningsPoint = (value: unknown): value is DailyEarningsPoint =>
+  isNonEmptyObject(value) &&
+  typeof value.date === 'string' &&
+  /^\d{4}-\d{2}-\d{2}$/.test(value.date) &&
+  typeof value.earnings === 'number' &&
+  Number.isFinite(value.earnings);
+
+const buildDailyEarningsTrendSummary = (raw: unknown): DailyEarningsTrendSummary | undefined => {
+  if (!isNonEmptyObject(raw)) return undefined;
+
+  const scopes = Object.entries(raw).filter(([, scopeValue]) => isNonEmptyObject(scopeValue));
+  if (scopes.length === 0) return undefined;
+
+  const scopeEntry = scopes.find(([scope]) => scope === 'all') ?? scopes[0];
+  if (!scopeEntry) return undefined;
+
+  const [scope, scopeMap] = scopeEntry;
+  const entries = Object.entries(scopeMap)
+    .map(([code, points]) => [code, Array.isArray(points) ? points.filter(isDailyEarningsPoint) : []] as const)
+    .filter(([, points]) => points.length > 0);
+  if (entries.length === 0) return undefined;
+
+  const byDate = new Map<string, number>();
+  entries.forEach(([, points]) => {
+    points.forEach((point) => {
+      byDate.set(point.date, (byDate.get(point.date) ?? 0) + point.earnings);
+    });
+  });
+
+  const recentPoints = Array.from(byDate.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-3)
+    .map(([date, earnings]) => ({ date, earnings: round(earnings) }));
+
+  if (recentPoints.length === 0) return undefined;
+
+  const latest = recentPoints.at(-1) ?? null;
+  const previous = recentPoints.length > 1 ? recentPoints.at(-2) ?? null : null;
+  const latestEarnings = latest?.earnings ?? null;
+  const previousEarnings = previous?.earnings ?? null;
+  const trendText =
+    latest && previous
+      ? `${latest.date} ${latest.earnings >= 0 ? '+' : ''}${latest.earnings.toFixed(2)} 元，较前一日${latest.earnings >= previous.earnings ? '走强' : '走弱'}`
+      : latest
+        ? `${latest.date} ${latest.earnings >= 0 ? '+' : ''}${latest.earnings.toFixed(2)} 元`
+        : null;
+
+  return {
+    scope,
+    latestDate: latest?.date ?? null,
+    latestEarnings,
+    previousDate: previous?.date ?? null,
+    previousEarnings,
+    recentPoints,
+    trendText,
+  };
+};
 
 const isEnabled = (value: string | undefined, defaultValue = true) => {
   if (value === undefined) return defaultValue;
@@ -2024,11 +2108,15 @@ const buildHoldingsSnapshot = async (
   const holdingGain = holdings.reduce((sum, item) => sum + item.totalGain, 0);
   const underlyingExposures = buildUnderlyingExposures(holdings, totalAssets);
   const riskRadar = buildPortfolioRiskRadar(holdings, totalAssets);
+  const dailyEarningsSummary = buildDailyEarningsTrendSummary(payload.fundDailyEarnings);
 
   return {
     asOf: payload.exportDate || new Date().toISOString(),
     currency: 'CNY',
     totalAssets: round(totalAssets),
+    availableAssets: typeof payload.availableAssets === 'number' && Number.isFinite(payload.availableAssets)
+      ? round(payload.availableAssets)
+      : undefined,
     totalDayGain: round(totalDayGain),
     totalDayGainPct: totalAssets - totalDayGain > 0 ? round((totalDayGain / (totalAssets - totalDayGain)) * 100) : 0,
     holdingGain: round(holdingGain),
@@ -2042,6 +2130,7 @@ const buildHoldingsSnapshot = async (
     quantSignals: holdings.map((item) => item.quantSignal).filter((item): item is FundQuantSignalSnapshot => Boolean(item)),
     riskRadar,
     dataCoverage: buildHoldingsDataCoverage(holdings, payload.investmentProfile),
+    dailyEarningsSummary,
     investmentProfile: payload.investmentProfile,
   };
 };
@@ -2172,9 +2261,13 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
 
   const summary = [
     `总资产: ${holdings.totalAssets}`,
+    typeof holdings.availableAssets === 'number'
+      ? `可用资产: ${holdings.availableAssets}`
+      : '可用资产: missing',
     `持仓数量: ${holdings.holdings.length}`,
     `总收益: ${holdings.holdingGain} (${holdings.holdingGainPct}%)`,
     `日收益: ${holdings.totalDayGain} (${holdings.totalDayGainPct}%)`,
+    holdings.dailyEarningsSummary?.trendText ? `近3日每日收益: ${holdings.dailyEarningsSummary.trendText}` : '近3日每日收益: missing',
     topGain ? `收益最佳: ${topGain.name} (${topGain.totalGainPct}%)` : '',
     topLoss ? `收益最弱: ${topLoss.name} (${topLoss.totalGainPct}%)` : '',
     `前三大仓位集中度: ${(concentration * 100).toFixed(1)}%`,
@@ -2432,6 +2525,9 @@ const buildTodayProfitMessage = async (env: Env, options?: { intraday?: boolean;
   const payload = await readGistBackup(env);
   const funds = payload.funds.filter((fund) => fund.holdingShares > 0 && fund.currentNav > 0);
   const useIntraday = Boolean(options?.intraday);
+  const availableAssets = typeof payload.availableAssets === 'number' && Number.isFinite(payload.availableAssets)
+    ? payload.availableAssets
+    : 0;
   const profitFunds = useIntraday
     ? await buildIntradayProfitFunds(funds)
     : funds.map<IntradayProfitFundSnapshot>((fund) => ({
@@ -2455,6 +2551,7 @@ const buildTodayProfitMessage = async (env: Env, options?: { intraday?: boolean;
   const estimatedCount = profitFunds.filter((fund) => fund.source === '盘中估算').length;
   const unavailableCount = profitFunds.filter((fund) => fund.source === '估值不可用').length;
   const detailed = Boolean(options?.detailed);
+  const dailyEarningsSummary = buildDailyEarningsTrendSummary(payload.fundDailyEarnings);
   const dataHint = useIntraday
     ? `以下为 Worker 实时拉取公开前十大持仓和腾讯行情后的盘中估算，不是基金官方净值。盘中估算 ${estimatedCount}/${funds.length} 只。`
     : marketPhase === 'preMarket'
@@ -2491,6 +2588,9 @@ const buildTodayProfitMessage = async (env: Env, options?: { intraday?: boolean;
     '',
     `当前A股阶段：${phaseLabel}`,
     dataHint,
+    '',
+    `可用资产：${formatMoney(availableAssets)}`,
+    dailyEarningsSummary?.trendText ? `近3日每日收益：${dailyEarningsSummary.trendText}` : '',
     '',
     `今日总盈亏：${formatMoney(totalDayGain)}`,
     `今日收益率：${formatPct(totalDayGainPct)}`,
