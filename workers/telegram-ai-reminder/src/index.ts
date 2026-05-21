@@ -350,6 +350,12 @@ interface NewsSnapshot {
   failedSources?: string[];
 }
 
+interface PortfolioNewsKeyword {
+  keyword: string;
+  source: 'fund' | 'equity' | 'sector' | 'theme' | 'ticker';
+  origin: string;
+}
+
 interface EastMoneyFundFlowResponse {
   data?: {
     diff?: Array<{
@@ -2341,32 +2347,74 @@ const formatPublicMoney = (value: number) => {
   return `${sign}${round(absValue).toFixed(2)} 元`;
 };
 
+const PORTFOLIO_NEWS_SYNONYMS: Record<string, string[]> = {
+  人工智能: ['AI', 'AIGC', '大模型', '算力', '机器人', '智能驾驶', '数据中心'],
+  新能源: ['锂电', '锂电池', '储能', '光伏', '风电', '电动车', '新能源汽车', '电池', '充电桩'],
+  消费: ['白酒', '食品饮料', '医美', '免税', '零售', '家电', '旅游', '餐饮'],
+  医药: ['创新药', '医疗器械', 'CXO', '生物医药', '中药', '疫苗'],
+  半导体: ['芯片', '晶圆', '封测', '光刻机', '存储芯片', '集成电路'],
+  军工: ['国防军工', '航天', '航空发动机', '低空经济', '卫星'],
+  港股: ['恒生', '港股通', '恒生科技', '南向资金'],
+  互联网: ['平台经济', '游戏', '云计算', '电商', '传媒'],
+  金融: ['银行', '证券', '券商', '保险', '地产链'],
+  汽车: ['整车', '汽车零部件', '智能座舱', '智能驾驶', '华为汽车'],
+};
+
+const addPortfolioKeyword = (
+  keywords: Map<string, PortfolioNewsKeyword>,
+  keyword: string | undefined,
+  source: PortfolioNewsKeyword['source'],
+  origin?: string,
+) => {
+  const normalized = keyword?.trim();
+  if (!normalized || normalized.length < 2) return;
+  if (!keywords.has(normalized)) {
+    keywords.set(normalized, { keyword: normalized, source, origin: origin || normalized });
+  }
+  PORTFOLIO_NEWS_SYNONYMS[normalized]?.forEach((alias) => {
+    if (!keywords.has(alias)) keywords.set(alias, { keyword: alias, source, origin: normalized });
+  });
+};
+
 const buildPortfolioNewsKeywords = (snapshot: HoldingsSnapshot) => {
-  const keywords = new Set<string>();
+  const keywords = new Map<string, PortfolioNewsKeyword>();
   snapshot.holdings.forEach((fund) => {
-    if (fund.name.trim()) keywords.add(fund.name.trim());
+    addPortfolioKeyword(keywords, fund.name, 'fund');
     fund.topEquityHoldings?.forEach((equity) => {
-      if (equity.name.trim()) keywords.add(equity.name.trim());
-      if (equity.sector?.trim()) keywords.add(equity.sector.trim());
-      if (equity.ticker.trim()) keywords.add(equity.ticker.trim());
+      addPortfolioKeyword(keywords, equity.name, 'equity');
+      addPortfolioKeyword(keywords, equity.sector, 'sector');
+      addPortfolioKeyword(keywords, equity.ticker, 'ticker', equity.name);
     });
   });
   snapshot.underlyingExposures.forEach((exposure) => {
-    if (exposure.theme.trim()) keywords.add(exposure.theme.trim());
+    addPortfolioKeyword(keywords, exposure.theme, 'theme');
     exposure.topHoldings.forEach((holding) => {
-      if (holding.name.trim()) keywords.add(holding.name.trim());
-      if (holding.ticker.trim()) keywords.add(holding.ticker.trim());
+      addPortfolioKeyword(keywords, holding.name, 'equity');
+      addPortfolioKeyword(keywords, holding.ticker, 'ticker', holding.name);
     });
   });
-  return Array.from(keywords).filter(Boolean);
+  return Array.from(keywords.values());
 };
 
-const findPortfolioNewsRelation = (title: string, keywords: string[]) => {
-  const matchedKeyword = keywords.find((keyword) => title.includes(keyword));
+const normalizePortfolioNewsText = (value: string | undefined) => (value || '').toLowerCase();
+
+const findPortfolioNewsRelation = (item: NewsItemSnapshot, keywords: PortfolioNewsKeyword[]) => {
+  const searchableText = normalizePortfolioNewsText([item.title, item.source, item.url].filter(Boolean).join(' '));
+  const matchedKeyword = keywords.find(({ keyword }) => searchableText.includes(keyword.toLowerCase()));
   if (!matchedKeyword) return null;
+  const sourceLabel =
+    matchedKeyword.source === 'fund'
+      ? '持有基金'
+      : matchedKeyword.source === 'equity'
+        ? '底层重仓股'
+        : matchedKeyword.source === 'ticker'
+          ? '底层重仓股代码'
+          : matchedKeyword.source === 'sector'
+            ? '底层行业'
+            : '底层主题';
   return {
     relatedToPortfolio: true,
-    relationReason: `标题提到“${matchedKeyword}”，与当前底层暴露或重仓主题可能相关`,
+    relationReason: `命中${sourceLabel}线索“${matchedKeyword.keyword}”（来源：${matchedKeyword.origin}），与当前组合底层暴露可能相关`,
   };
 };
 
@@ -2476,7 +2524,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       description: '政策、财报、公告和风险新闻，按影响方向整理。',
       items: newsItems.slice(0, 6).map((item) => {
         const tone = createPublicNewsInsightTone(item.title);
-        const relation = findPortfolioNewsRelation(item.title, portfolioKeywords);
+        const relation = findPortfolioNewsRelation(item, portfolioKeywords);
         return {
           tag: item.source || '新闻',
           title: item.title,

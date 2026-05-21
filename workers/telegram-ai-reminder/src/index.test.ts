@@ -133,6 +133,12 @@ const sinaNewsPayload = {
         url: 'https://finance.sina.com.cn/test.html',
         ctime: String(Math.floor(Date.now() / 1000)),
       },
+      {
+        title: '锂电池产业链订单改善',
+        source: '新浪财经',
+        url: 'https://finance.sina.com.cn/lithium.html',
+        ctime: String(Math.floor(Date.now() / 1000)),
+      },
     ],
   },
 };
@@ -334,6 +340,11 @@ describe('telegram ai reminder worker', () => {
     expect(portfolioNews?.url).toBe('https://finance.sina.com.cn/test.html');
     expect(portfolioNews?.relatedToPortfolio).toBe(true);
     expect(portfolioNews?.relationReason).toContain('新能源');
+    const synonymNews = body.sections
+      .find((section) => section.title === '盘后消息')
+      ?.items.find((item) => item.title.includes('锂电池'));
+    expect(synonymNews?.relatedToPortfolio).toBe(true);
+    expect(synonymNews?.relationReason).toContain('来源：新能源');
     expect(body.sourceStatus.some((item) => item.label === '盘后消息')).toBe(true);
   });
 
