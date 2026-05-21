@@ -14,6 +14,9 @@ export interface NewsSummaryInsight {
   relation: string;
   time: string;
   tone: NewsSummaryTone;
+  url?: string;
+  relatedToPortfolio?: boolean;
+  relationReason?: string;
 }
 
 export interface NewsSummarySection {
@@ -40,6 +43,7 @@ export interface NewsSummaryResponse {
 
 const DEFAULT_NEWS_SUMMARY_WORKER_URL = 'https://fund-manager-telegram-ai-reminder.nizhan80.workers.dev';
 const NEWS_SUMMARY_CACHE_TTL_MS = 2 * 60 * 1000;
+const NEWS_SUMMARY_STORAGE_KEY = 'fundManager.newsSummaryCache.v1';
 
 type CacheEntry = {
   expiresAt: number;
@@ -47,6 +51,59 @@ type CacheEntry = {
 };
 
 let cachedSummary: CacheEntry | null = null;
+
+const isCacheEntryValid = (entry: CacheEntry | null): entry is CacheEntry => {
+  return Boolean(entry && entry.expiresAt > Date.now());
+};
+
+const readLocalNewsSummaryCache = (): CacheEntry | null => {
+  try {
+    const raw = localStorage.getItem(NEWS_SUMMARY_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CacheEntry>;
+    if (
+      typeof parsed.expiresAt !== 'number' ||
+      typeof parsed.value !== 'object' ||
+      parsed.value === null
+    ) {
+      return null;
+    }
+    return parsed as CacheEntry;
+  } catch {
+    return null;
+  }
+};
+
+const writeLocalNewsSummaryCache = (entry: CacheEntry) => {
+  try {
+    localStorage.setItem(NEWS_SUMMARY_STORAGE_KEY, JSON.stringify(entry));
+  } catch {
+    // ignore storage errors
+  }
+};
+
+export const getCachedNewsSummary = (): NewsSummaryResponse | null => {
+  if (isCacheEntryValid(cachedSummary)) {
+    return cachedSummary.value;
+  }
+
+  const localEntry = readLocalNewsSummaryCache();
+  if (isCacheEntryValid(localEntry)) {
+    cachedSummary = localEntry;
+    return localEntry.value;
+  }
+
+  return null;
+};
+
+export const clearNewsSummaryCache = () => {
+  cachedSummary = null;
+  try {
+    localStorage.removeItem(NEWS_SUMMARY_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+};
 
 const resolveNewsSummaryWorkerUrl = () => {
   const envUrl =
@@ -56,8 +113,16 @@ const resolveNewsSummaryWorkerUrl = () => {
 
 export const fetchNewsSummary = async (force = false): Promise<NewsSummaryResponse | null> => {
   const now = Date.now();
-  if (!force && cachedSummary && cachedSummary.expiresAt > now) {
+  if (!force && isCacheEntryValid(cachedSummary)) {
     return cachedSummary.value;
+  }
+
+  if (!force) {
+    const localEntry = readLocalNewsSummaryCache();
+    if (isCacheEntryValid(localEntry)) {
+      cachedSummary = localEntry;
+      return localEntry.value;
+    }
   }
 
   try {
@@ -71,6 +136,7 @@ export const fetchNewsSummary = async (force = false): Promise<NewsSummaryRespon
 
     const value = payload as NewsSummaryResponse;
     cachedSummary = { value, expiresAt: now + NEWS_SUMMARY_CACHE_TTL_MS };
+    writeLocalNewsSummaryCache(cachedSummary);
     return value;
   } catch {
     return null;

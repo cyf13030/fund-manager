@@ -2268,6 +2268,9 @@ interface PublicNewsSummaryInsight {
   relation: string;
   time: string;
   tone: PublicNewsSummaryTone;
+  url?: string;
+  relatedToPortfolio?: boolean;
+  relationReason?: string;
 }
 
 interface PublicNewsSummarySection {
@@ -2322,13 +2325,49 @@ const formatPublicTime = (value: string | undefined) => {
   return new Date(parsed).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 };
 
+const buildPortfolioNewsKeywords = (snapshot: HoldingsSnapshot) => {
+  const keywords = new Set<string>();
+  snapshot.holdings.forEach((fund) => {
+    if (fund.name.trim()) keywords.add(fund.name.trim());
+    fund.topEquityHoldings?.forEach((equity) => {
+      if (equity.name.trim()) keywords.add(equity.name.trim());
+      if (equity.sector?.trim()) keywords.add(equity.sector.trim());
+      if (equity.ticker.trim()) keywords.add(equity.ticker.trim());
+    });
+  });
+  snapshot.underlyingExposures.forEach((exposure) => {
+    if (exposure.theme.trim()) keywords.add(exposure.theme.trim());
+    exposure.topHoldings.forEach((holding) => {
+      if (holding.name.trim()) keywords.add(holding.name.trim());
+      if (holding.ticker.trim()) keywords.add(holding.ticker.trim());
+    });
+  });
+  return Array.from(keywords).filter(Boolean);
+};
+
+const findPortfolioNewsRelation = (title: string, keywords: string[]) => {
+  const matchedKeyword = keywords.find((keyword) => title.includes(keyword));
+  if (!matchedKeyword) return null;
+  return {
+    relatedToPortfolio: true,
+    relationReason: `标题提到“${matchedKeyword}”，与当前底层暴露或重仓主题可能相关`,
+  };
+};
+
 const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryResponse> => {
-  const [marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot] = await Promise.all([
+  const [payload, marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot] = await Promise.all([
+    readGistBackup(env),
     fetchMarketSnapshot(env),
     fetchOverseasMarketSnapshot(env),
     fetchNewsSnapshot(env),
     fetchFundFlowSnapshot(env),
   ]);
+
+  const holdingsSnapshot = await buildHoldingsSnapshot(payload, {
+    holdingsTimeoutMs: FAST_ANALYSIS_FUND_HOLDINGS_TIMEOUT_MS,
+    quantMode: 'cachedOnly',
+  });
+  const portfolioKeywords = buildPortfolioNewsKeywords(holdingsSnapshot);
 
   const marketIndices = marketSnapshot?.indices ?? [];
   const overseasItems = overseasMarketSnapshot?.items ?? [];
@@ -2421,6 +2460,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       description: '政策、财报、公告和风险新闻，按影响方向整理。',
       items: newsItems.slice(0, 6).map((item) => {
         const tone = createPublicNewsInsightTone(item.title);
+        const relation = findPortfolioNewsRelation(item.title, portfolioKeywords);
         return {
           tag: item.source || '新闻',
           title: item.title,
@@ -2428,6 +2468,8 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
           relation: '用于筛选对市场情绪可能有影响的消息。',
           time: formatPublicTime(item.publishedAt),
           tone,
+          url: item.url,
+          ...relation,
         };
       }),
     },

@@ -1,14 +1,16 @@
 /// <reference types="vitest/globals" />
 import React from 'react';
 import '@testing-library/jest-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { NewsPage } from '../NewsPage';
 import { LanguageProvider } from '../../services/i18n';
 
 const fetchNewsSummaryMock = vi.hoisted(() => vi.fn());
+const getCachedNewsSummaryMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../services/newsSummary', () => ({
   fetchNewsSummary: fetchNewsSummaryMock,
+  getCachedNewsSummary: getCachedNewsSummaryMock,
 }));
 
 describe('NewsPage', () => {
@@ -48,8 +50,10 @@ describe('NewsPage', () => {
               title: '中长期资金入市相关表述增强',
               impact: '偏正面',
               relation: '用于筛选对市场情绪可能有影响的消息。',
+              relationReason: '命中政策关键词，与组合风险偏好相关。',
               time: '16:20',
               tone: 'positive',
+              url: 'https://example.com/news/1',
             },
           ],
         },
@@ -89,6 +93,7 @@ describe('NewsPage', () => {
         { label: '资金流', value: 'partial', tone: 'warning' },
       ],
     });
+    getCachedNewsSummaryMock.mockReturnValue(null);
 
     render(
       <LanguageProvider>
@@ -102,5 +107,53 @@ describe('NewsPage', () => {
     expect(screen.getByText('本次 AI 依据')).toBeInTheDocument();
     expect(screen.getByText('偏强')).toBeInTheDocument();
     expect(screen.getByText('半导体 +1200 万元')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '持仓相关' }));
+    expect(screen.getByText('当前筛选下暂无该类资讯。')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '盘后消息' }));
+    fireEvent.click(screen.getByRole('button', { name: /中长期资金入市相关表述增强/ }));
+    expect(screen.getByText(/关联原因：/)).toBeInTheDocument();
+    expect(screen.getByText('打开链接')).toBeInTheDocument();
+  });
+
+  it('prefers cached summary before refresh', async () => {
+    const cachedSummary = {
+      ok: true,
+      generatedAt: '2026-05-21T08:00:00.000Z',
+      marketPhase: 'postClose',
+      summaryLine: '缓存摘要',
+      cards: [
+        { title: '市场温度', value: '缓存', note: '本地缓存内容', tone: 'neutral' },
+        { title: '盘后消息', value: '缓存', note: '本地缓存内容', tone: 'neutral' },
+        { title: '外围市场', value: '缓存', note: '本地缓存内容', tone: 'neutral' },
+        { title: '资金流', value: '缓存', note: '本地缓存内容', tone: 'neutral' },
+      ],
+      sections: [
+        { title: 'A 股指数', description: '本地缓存内容。', items: [] },
+        { title: '盘后消息', description: '本地缓存内容。', items: [] },
+        { title: '资金流', description: '本地缓存内容。', items: [] },
+        { title: '外围市场', description: '本地缓存内容。', items: [] },
+      ],
+      sourceStatus: [
+        { label: 'A股指数', value: 'available', tone: 'neutral' },
+        { label: '外围市场', value: 'available', tone: 'neutral' },
+        { label: '盘后消息', value: 'available', tone: 'neutral' },
+        { label: '资金流', value: 'available', tone: 'neutral' },
+      ],
+    };
+
+    getCachedNewsSummaryMock.mockReturnValue(cachedSummary);
+    fetchNewsSummaryMock.mockResolvedValue(cachedSummary);
+
+    render(
+      <LanguageProvider>
+        <NewsPage />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByText('缓存摘要')).toBeInTheDocument();
+    expect(screen.getAllByText('本地缓存内容。').length).toBeGreaterThan(0);
+    await waitFor(() => expect(fetchNewsSummaryMock).toHaveBeenCalledWith(true));
   });
 });
