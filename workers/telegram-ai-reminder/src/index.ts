@@ -454,6 +454,31 @@ interface AnalysisContextSnapshot {
   fundFlowSnapshot?: FundFlowSnapshot;
 }
 
+interface MarketStructureSummary {
+  breadthLabel: '偏强' | '中性' | '偏弱' | '缺失';
+  positiveCount: number;
+  negativeCount: number;
+  flatCount: number;
+  averageChangePct: number | null;
+  largeCapChangePct: number | null;
+  midSmallCapChangePct: number | null;
+  styleBias: '大盘占优' | '中小盘占优' | '风格均衡' | '缺失';
+  reason: string;
+}
+
+interface PortfolioMarketFitSummary {
+  level: '高' | '中' | '低' | '缺失';
+  score: number;
+  matchedThemes: Array<{
+    theme: string;
+    portfolioPct: number;
+    matchedMarketTheme: string;
+    rank: number;
+    netInflow: number;
+  }>;
+  reason: string;
+}
+
 interface TelegramUpdate {
   message?: {
     text?: string;
@@ -2527,6 +2552,115 @@ const buildPortfolioNewsKeywords = (snapshot: HoldingsSnapshot) => {
   return Array.from(keywords.values());
 };
 
+const buildThemeMatchKeywords = (theme: string) => {
+  const normalized = theme.trim();
+  const directAliases = PORTFOLIO_NEWS_SYNONYMS[normalized] || [];
+  const reverseAliases = Object.entries(PORTFOLIO_NEWS_SYNONYMS)
+    .filter(([, aliases]) => aliases.includes(normalized))
+    .map(([keyword]) => keyword);
+  return Array.from(new Set([normalized, ...directAliases, ...reverseAliases].filter(Boolean)));
+};
+
+const isThemeMatched = (theme: string, target: string) => {
+  const targetText = target.toLowerCase();
+  return buildThemeMatchKeywords(theme).some((keyword) => {
+    const keywordText = keyword.toLowerCase();
+    return targetText.includes(keywordText) || keywordText.includes(targetText);
+  });
+};
+
+const buildMarketStructureSummary = (marketSnapshot: MarketSnapshot | undefined): MarketStructureSummary => {
+  const indices = marketSnapshot?.indices ?? [];
+  if (indices.length === 0) {
+    return {
+      breadthLabel: '缺失',
+      positiveCount: 0,
+      negativeCount: 0,
+      flatCount: 0,
+      averageChangePct: null,
+      largeCapChangePct: null,
+      midSmallCapChangePct: null,
+      styleBias: '缺失',
+      reason: 'A 股指数样本缺失，无法判断市场宽度。',
+    };
+  }
+
+  const positiveCount = indices.filter((item) => item.changePct > 0.2).length;
+  const negativeCount = indices.filter((item) => item.changePct < -0.2).length;
+  const flatCount = indices.length - positiveCount - negativeCount;
+  const averageChangePct = round(indices.reduce((sum, item) => sum + item.changePct, 0) / indices.length);
+  const largeCap = indices.find((item) => item.code === 'sh000300' || item.name.includes('沪深300'));
+  const midSmall = indices.find(
+    (item) => item.code === 'sh000852' || item.code === 'sh000905' || item.name.includes('中证1000') || item.name.includes('中证500'),
+  );
+  const largeCapChangePct = largeCap?.changePct ?? null;
+  const midSmallCapChangePct = midSmall?.changePct ?? null;
+  const styleSpread = largeCapChangePct !== null && midSmallCapChangePct !== null ? midSmallCapChangePct - largeCapChangePct : null;
+  const styleBias =
+    styleSpread === null
+      ? '缺失'
+      : styleSpread >= 0.5
+        ? '中小盘占优'
+        : styleSpread <= -0.5
+          ? '大盘占优'
+          : '风格均衡';
+  const breadthLabel =
+    positiveCount > negativeCount && averageChangePct >= 0.2
+      ? '偏强'
+      : negativeCount > positiveCount && averageChangePct <= -0.2
+        ? '偏弱'
+        : '中性';
+
+  return {
+    breadthLabel,
+    positiveCount,
+    negativeCount,
+    flatCount,
+    averageChangePct,
+    largeCapChangePct,
+    midSmallCapChangePct,
+    styleBias,
+    reason: `指数样本 ${indices.length} 个，上涨 ${positiveCount} 个、下跌 ${negativeCount} 个，均值 ${formatPublicChangePct(averageChangePct)}，${styleBias}。`,
+  };
+};
+
+const buildPortfolioMarketFitSummary = (
+  holdings: HoldingsSnapshot,
+  fundFlowSnapshot: FundFlowSnapshot | undefined,
+): PortfolioMarketFitSummary => {
+  const flowItems = fundFlowSnapshot?.items.slice(0, 10) ?? [];
+  if (holdings.underlyingExposures.length === 0 || flowItems.length === 0) {
+    return {
+      level: '缺失',
+      score: 0,
+      matchedThemes: [],
+      reason: '底层主题暴露或市场主线资金流缺失，无法计算持仓匹配度。',
+    };
+  }
+
+  const matchedThemes = holdings.underlyingExposures.flatMap((exposure) => {
+    const matchedFlow = flowItems.find((flow) => isThemeMatched(exposure.theme, flow.name));
+    if (!matchedFlow) return [];
+    return [
+      {
+        theme: exposure.theme,
+        portfolioPct: exposure.portfolioPct,
+        matchedMarketTheme: matchedFlow.name,
+        rank: matchedFlow.netInflowRank,
+        netInflow: matchedFlow.netInflow,
+      },
+    ];
+  });
+  const score = round(matchedThemes.reduce((sum, item) => sum + item.portfolioPct, 0));
+  const level = score >= 20 || matchedThemes.length >= 3 ? '高' : score >= 8 || matchedThemes.length >= 2 ? '中' : matchedThemes.length > 0 ? '低' : '低';
+  const reason =
+    matchedThemes.length > 0
+      ? `命中 ${matchedThemes.length} 个持仓主题，合计约 ${score}% 组合暴露与资金主线相关。`
+      : '当前资金主线与组合底层主题暴露重合较少。';
+
+  return { level, score, matchedThemes, reason };
+};
+
 const normalizePortfolioNewsText = (value: string | undefined) => (value || '').toLowerCase();
 
 const findPortfolioNewsRelation = (item: NewsItemSnapshot, keywords: PortfolioNewsKeyword[]) => {
@@ -2583,6 +2717,8 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
   const negativeNewsCount = newsItems.filter((item) => createPublicNewsInsightTone(item.title) === 'negative').length;
   const topFlowItem = fundFlowItems[0];
   const topTrendItem = trendItems[0];
+  const marketStructure = buildMarketStructureSummary(marketSnapshot);
+  const portfolioMarketFit = buildPortfolioMarketFitSummary(holdingsSnapshot, fundFlowSnapshot);
 
   const summaryLine = [
     marketIndices[0]
@@ -2634,6 +2770,32 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
           ? '资金流尚未形成或当前非交易时段'
           : '主力资金方向暂不可用',
       tone: topTrendItem ? 'warning' : 'neutral',
+    },
+    {
+      title: '市场宽度',
+      value: marketStructure.breadthLabel,
+      note: marketStructure.reason,
+      tone:
+        marketStructure.breadthLabel === '偏强'
+          ? 'positive'
+          : marketStructure.breadthLabel === '偏弱'
+            ? 'negative'
+            : marketStructure.breadthLabel === '缺失'
+              ? 'neutral'
+              : 'info',
+    },
+    {
+      title: '持仓匹配',
+      value: portfolioMarketFit.level,
+      note: portfolioMarketFit.reason,
+      tone:
+        portfolioMarketFit.level === '高'
+          ? 'positive'
+          : portfolioMarketFit.level === '中'
+            ? 'info'
+            : portfolioMarketFit.level === '低'
+              ? 'warning'
+              : 'neutral',
     },
   ];
 
@@ -2928,10 +3090,12 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
       topItems: fundFlowSnapshot?.items.slice(0, 8) ?? [],
       trendItems: fundFlowSnapshot?.trendItems?.slice(0, 8) ?? [],
     },
+    marketStructure: buildMarketStructureSummary(marketSnapshot),
     portfolioExposure: {
       topExposures,
       topHoldings,
       equityOverlapCount: holdings.equityOverlap.length,
+      marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
     },
   };
 
@@ -2946,12 +3110,14 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
 2) 外围市场/指数期货只能作为情绪和开盘扰动参考，不能写成 A 股必然涨跌。
 3) 盘后消息面只可引用摘要中已有标题；新闻缺失或接口失败时必须说明，不得假设政策利好或利空。
 4) 资金流连续性只能基于 trendItems；trendItems 为空时必须说明连续性样本不足。
-5) 组合方向必须结合持仓底层暴露、近几日收益趋势、量化摘要和 A 股/外围市场共同判断。
-6) 交易确认必须按 T+1 口径处理：待确认买入不能算当前已确认持仓收益；待确认卖出/调出资金不能算可立即使用现金；15:00 后交易需提示顺延风险。
-7) 如果存在待确认交易，必须单独说明它对明日判断的影响；如果交易确认状态不完整，必须降低置信度。
-8) 必须输出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”。
-9) 不得写“必涨”“必跌”“一定”。不确定就降低置信度。
-10) 最终回复不得出现 dataStatus、trendItems、marketSnapshot、overseasMarketSnapshot、fundFlowSnapshot、holdings 等字段名，必须转成自然语言。
+5) 组合方向必须结合持仓底层暴露、近几日收益趋势、量化摘要、市场宽度、持仓匹配度和 A 股/外围市场共同判断。
+6) 市场宽度只能基于摘要里的上涨/下跌指数样本和风格强弱判断；样本不足必须说明只是 proxy，不能冒充全市场上涨家数。
+7) 持仓匹配度必须区分“市场主线”和“当前组合真实底层暴露”，不能把市场热题材直接说成组合已持有。
+8) 交易确认必须按 T+1 口径处理：待确认买入不能算当前已确认持仓收益；待确认卖出/调出资金不能算可立即使用现金；15:00 后交易需提示顺延风险。
+9) 如果存在待确认交易，必须单独说明它对明日判断的影响；如果交易确认状态不完整，必须降低置信度。
+10) 必须输出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”。
+11) 不得写“必涨”“必跌”“一定”。不确定就降低置信度。
+12) 最终回复不得出现 dataStatus、trendItems、marketSnapshot、overseasMarketSnapshot、fundFlowSnapshot、holdings 等字段名，必须转成自然语言。
 
 预测专用摘要：
 ${JSON.stringify(predictionContext)}`;
@@ -2971,6 +3137,8 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
   const marketPhase = getChinaMarketPhase();
   const observationTitle = marketPhase === 'postClose' ? '明日观察点' : '今日观察点';
   const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
+  const marketStructure = buildMarketStructureSummary(marketSnapshot);
+  const portfolioMarketFit = buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot);
 
   const modeInstruction =
     mode === 'risk'
@@ -3020,6 +3188,17 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
     `资金流兜底建仓候选数量: ${holdings.fallbackBuildCandidates.length}`,
     `当前A股阶段: ${CHINA_MARKET_PHASE_LABELS[marketPhase]} (${marketPhase})`,
     `A股市场数据: ${marketSnapshot?.dataStatus ?? 'missing'}`,
+    `市场宽度: ${marketStructure.breadthLabel}`,
+    `市场宽度说明: ${marketStructure.reason}`,
+    `市场风格: ${marketStructure.styleBias}`,
+    `持仓匹配度: ${portfolioMarketFit.level}`,
+    `持仓匹配度说明: ${portfolioMarketFit.reason}`,
+    portfolioMarketFit.matchedThemes.length > 0
+      ? `匹配的持仓主题: ${portfolioMarketFit.matchedThemes
+          .slice(0, 5)
+          .map((item) => `${item.theme}->${item.matchedMarketTheme}(${item.portfolioPct}%)`)
+          .join('、')}`
+      : '匹配的持仓主题: missing',
     `外围市场/指数期货数据: ${overseasMarketSnapshot?.dataStatus ?? 'missing'}`,
     overseasMarketSnapshot?.items[0]
       ? `外围市场代表信号: ${overseasMarketSnapshot.items

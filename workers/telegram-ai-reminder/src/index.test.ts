@@ -349,6 +349,8 @@ describe('telegram ai reminder worker', () => {
     expect(body.summaryLine).toContain('上证指数');
     expect(body.cards[0].title).toBe('市场温度');
     expect(body.cards.some((card) => card.title === '资金流')).toBe(true);
+    expect(body.cards.some((card) => card.title === '市场宽度' && card.value === '中性')).toBe(true);
+    expect(body.cards.some((card) => card.title === '持仓匹配' && card.value === '低')).toBe(true);
     expect(body.sections.some((section) => section.title === '盘后消息')).toBe(true);
     expect(body.sections.find((section) => section.title === 'A 股指数')?.items[0].time).toBe('15:00');
     expect(body.sections.find((section) => section.title === '资金流')?.items[0].title).toBe(
@@ -422,6 +424,10 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('上证指数');
     expect(aiBody.messages[0].content).toContain('资金流入最强方向: 人工智能');
     expect(aiBody.messages[0].content).toContain('资金流数据: available');
+    expect(aiBody.messages[0].content).toContain('市场宽度: 中性');
+    expect(aiBody.messages[0].content).toContain('市场宽度说明: 指数样本 2 个');
+    expect(aiBody.messages[0].content).toContain('持仓匹配度: 低');
+    expect(aiBody.messages[0].content).toContain('匹配的持仓主题: 新能源->新能源');
     expect(aiBody.messages[0].content).toContain('可用资产: 5000');
     expect(aiBody.messages[0].content).toContain('交易确认规则: 普通场外基金按 T+1');
     expect(aiBody.messages[0].content).toContain('待确认交易数量: 2');
@@ -991,6 +997,9 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('overseasMarket');
     expect(aiBody.messages[0].content).toContain('afterHoursNews');
     expect(aiBody.messages[0].content).toContain('fundFlow');
+    expect(aiBody.messages[0].content).toContain('marketStructure');
+    expect(aiBody.messages[0].content).toContain('marketFit');
+    expect(aiBody.messages[0].content).toContain('持仓匹配度必须区分');
     expect(aiBody.messages[0].content).toContain('transactionSettlement');
     expect(aiBody.messages[0].content).toContain('待确认买入不能算当前已确认持仓收益');
     expect(aiBody.messages[0].content).not.toContain('buildCandidates');
