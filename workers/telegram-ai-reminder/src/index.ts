@@ -767,13 +767,34 @@ const hexToBytes = (hex: string) => {
   return bytes;
 };
 
-const fetchText = async (url: string, init: RequestInit, label: string): Promise<string> => {
+const resolveResponseEncoding = (response: Response, fallbackEncoding: string) => {
+  const contentType = response.headers.get('content-type') || '';
+  const charsetMatch = contentType.match(/charset=([^;\s]+)/i);
+  return charsetMatch?.[1]?.trim() || fallbackEncoding;
+};
+
+const decodeResponseText = async (response: Response, fallbackEncoding: string) => {
+  const encoding = resolveResponseEncoding(response, fallbackEncoding);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  try {
+    return new TextDecoder(encoding).decode(bytes);
+  } catch {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+};
+
+const fetchText = async (
+  url: string,
+  init: RequestInit,
+  label: string,
+  encoding: string = 'utf-8',
+): Promise<string> => {
   const response = await fetch(url, init);
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
+    const text = await decodeResponseText(response.clone(), encoding).catch(() => '');
     throw new Error(`${label} 请求失败: ${response.status} ${text}`.trim());
   }
-  return response.text();
+  return decodeResponseText(response, encoding);
 };
 
 const fetchTextWithTimeout = async (
@@ -781,18 +802,19 @@ const fetchTextWithTimeout = async (
   init: RequestInit,
   label: string,
   timeoutMs: number,
+  encoding: string = 'utf-8',
 ): Promise<string> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchText(url, { ...init, signal: controller.signal }, label);
+    return await fetchText(url, { ...init, signal: controller.signal }, label, encoding);
   } finally {
     clearTimeout(timeout);
   }
 };
 
 const fetchJson = async <T>(url: string, init: RequestInit, label: string): Promise<T> => {
-  const text = await fetchText(url, init, label);
+    const text = await fetchText(url, init, label);
   return JSON.parse(text) as T;
 };
 
@@ -1506,6 +1528,7 @@ const fetchTencentStockPctMap = async (codes: string[]) => {
     `${TENCENT_QUOTE_API}${uniqueCodes.map((code) => `s_${code}`).join(',')}`,
     { headers: { Accept: '*/*' } },
     '读取腾讯实时股票行情',
+    'gb18030',
   );
   const pctMap: Record<string, number> = {};
   text.split(';').forEach((line) => {
@@ -1581,7 +1604,12 @@ const fetchMarketSnapshot = async (env: Env): Promise<MarketSnapshot | undefined
   if (codes.length === 0) return undefined;
 
   try {
-    const text = await fetchText(`${TENCENT_QUOTE_API}${codes.join(',')}`, {}, '读取 A 股市场指数');
+    const text = await fetchText(
+      `${TENCENT_QUOTE_API}${codes.join(',')}`,
+      {},
+      '读取 A 股市场指数',
+      'gb18030',
+    );
     const indices = text
       .split(';')
       .map(parseTencentMarketLine)
@@ -2468,7 +2496,12 @@ const fetchOverseasMarketSnapshot = async (env: Env): Promise<OverseasMarketSnap
   const codes = DEFAULT_OVERSEAS_MARKET_CODES;
 
   try {
-    const text = await fetchText(`${TENCENT_QUOTE_API}${codes.join(',')}`, {}, '读取外围市场与指数期货');
+    const text = await fetchText(
+      `${TENCENT_QUOTE_API}${codes.join(',')}`,
+      {},
+      '读取外围市场与指数期货',
+      'gb18030',
+    );
     const items = text
       .split(';')
       .map(parseTencentMarketLine)
