@@ -4,6 +4,7 @@ import { db, exportFundsToJsonString, importFundsFromBackupContent } from '../db
 describe('db backup watchlist sync data flow', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it('exports watchlists into backup json for gist upload', async () => {
@@ -30,6 +31,12 @@ describe('db backup watchlist sync data flow', () => {
       },
     ]);
     vi.spyOn(db.investmentPlans, 'toArray').mockResolvedValue([]);
+    localStorage.setItem(
+      'fundManager.fundDailyEarnings',
+      JSON.stringify({
+        '110011': [{ date: '2026-03-20', earnings: 1.23, rate: 1, baseCostAmount: 123 }],
+      }),
+    );
 
     const payload = JSON.parse(await exportFundsToJsonString()) as {
       version: number;
@@ -37,6 +44,7 @@ describe('db backup watchlist sync data flow', () => {
       accounts?: Array<{ name: string; id?: number }>;
       watchlists?: Array<{ code: string; id?: number }>;
       investmentPlans?: unknown[];
+      fundDailyEarnings?: Record<string, Array<{ date: string; earnings: number }>>;
     };
 
     expect(payload.version).toBe(1);
@@ -48,6 +56,10 @@ describe('db backup watchlist sync data flow', () => {
     expect(payload.watchlists?.[0]?.code).toBe('110011');
     expect(payload.watchlists?.[0]).not.toHaveProperty('id');
     expect(payload.investmentPlans).toHaveLength(0);
+    expect(payload.fundDailyEarnings?.['110011']?.[0]).toMatchObject({
+      date: '2026-03-20',
+      earnings: 1.23,
+    });
   });
 
   it('imports watchlists and accounts from gist backup content', async () => {
@@ -76,6 +88,9 @@ describe('db backup watchlist sync data flow', () => {
           lastUpdate: '2026-03-20',
         },
       ],
+      fundDailyEarnings: {
+        '000001': [{ date: '2026-03-21', earnings: 2.34, rate: 1.2, baseCostAmount: 195 }],
+      },
     };
 
     const result = await importFundsFromBackupContent(JSON.stringify(backup));
@@ -162,6 +177,9 @@ describe('db backup watchlist sync data flow', () => {
           dayChangeVal: 2,
         },
       ],
+      fundDailyEarnings: {
+        '000001': [{ date: '2026-03-21', earnings: 2.34, rate: 1.2, baseCostAmount: 195 }],
+      },
       accounts: [{ name: '券商A', isDefault: false }],
       watchlists: [
         {
@@ -196,6 +214,9 @@ describe('db backup watchlist sync data flow', () => {
     expect(bulkAddWatchlistsSpy).toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ code: '110011' })]),
     );
+    expect(JSON.parse(localStorage.getItem('fundManager.fundDailyEarnings') || '{}')).toEqual({
+      '000001': [{ date: '2026-03-21', earnings: 2.34, rate: 1.2, baseCostAmount: 195 }],
+    });
     expect(result).toEqual({ added: 3, skipped: 0 });
   });
 

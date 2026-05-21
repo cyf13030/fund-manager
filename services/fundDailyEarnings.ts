@@ -5,7 +5,7 @@ export interface FundDailyEarningsPoint {
   baseCostAmount: number | null;
 }
 
-type FundDailyEarningsStore = Record<string, FundDailyEarningsPoint[]>;
+export type FundDailyEarningsStore = Record<string, FundDailyEarningsPoint[]>;
 
 const STORAGE_KEY = 'fundManager.fundDailyEarnings';
 
@@ -64,6 +64,14 @@ const writeStore = (store: FundDailyEarningsStore): void => {
   }
 };
 
+const sanitizeStore = (store: FundDailyEarningsStore): FundDailyEarningsStore => {
+  return Object.fromEntries(
+    Object.entries(store)
+      .map(([code, points]) => [code, points.filter(isValidPoint).sort(comparePoints)] as const)
+      .filter(([, points]) => points.length > 0),
+  );
+};
+
 export const recordFundDailyEarnings = (params: {
   code: string;
   date: string;
@@ -100,6 +108,22 @@ export const getFundDailyEarnings = (code: string): FundDailyEarningsPoint[] => 
 };
 
 export const getAllFundDailyEarnings = (): FundDailyEarningsStore => readStore();
+
+export const replaceAllFundDailyEarnings = (store: FundDailyEarningsStore): void => {
+  writeStore(sanitizeStore(store));
+};
+
+export const mergeFundDailyEarnings = (incoming: FundDailyEarningsStore): void => {
+  const store = readStore();
+  Object.entries(sanitizeStore(incoming)).forEach(([code, points]) => {
+    const byDate = new Map((store[code] ?? []).map((point) => [point.date, point]));
+    points.forEach((point) => {
+      byDate.set(point.date, point);
+    });
+    store[code] = Array.from(byDate.values()).sort(comparePoints);
+  });
+  writeStore(store);
+};
 
 export const aggregatePortfolioDailyEarnings = (
   store: FundDailyEarningsStore = readStore(),

@@ -617,11 +617,13 @@ const isDailyEarningsPoint = (value: unknown): value is DailyEarningsPoint =>
 const buildDailyEarningsTrendSummary = (raw: unknown): DailyEarningsTrendSummary | undefined => {
   if (!isNonEmptyObject(raw)) return undefined;
 
-  const scopes = Object.entries(raw).filter(([, scopeValue]) => isNonEmptyObject(scopeValue));
-  if (scopes.length === 0) return undefined;
-
-  const scopeEntry = scopes.find(([scope]) => scope === 'all') ?? scopes[0];
-  if (!scopeEntry) return undefined;
+  const rawEntries = Object.entries(raw);
+  const flatStore = rawEntries.some(([, points]) => Array.isArray(points));
+  const scopeEntry = flatStore
+    ? (['all', raw] as const)
+    : (rawEntries.filter(([, scopeValue]) => isNonEmptyObject(scopeValue)).find(([scope]) => scope === 'all') ??
+      rawEntries.find(([, scopeValue]) => isNonEmptyObject(scopeValue)));
+  if (!scopeEntry || !isNonEmptyObject(scopeEntry[1])) return undefined;
 
   const [scope, scopeMap] = scopeEntry;
   const entries = Object.entries(scopeMap)

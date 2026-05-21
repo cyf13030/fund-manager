@@ -34,7 +34,12 @@ import { sanitizeWatchlistName } from './watchlistName';
 import { runFundQuotePipeline } from './fundQuotePipeline';
 import { identifyFundType } from './fundTypeIdentifier';
 import { executeInvestmentPlans } from './investmentPlan';
-import { recordFundDailyEarnings } from './fundDailyEarnings';
+import {
+  getAllFundDailyEarnings,
+  mergeFundDailyEarnings,
+  recordFundDailyEarnings,
+  replaceAllFundDailyEarnings,
+} from './fundDailyEarnings';
 import { recordFundValuationSeries } from './fundValuationTimeseries';
 import type { RefreshExecutionResult, RefreshExecutionStatus } from './refreshPolicy';
 
@@ -1021,6 +1026,8 @@ export const exportFunds = async (): Promise<void> => {
   const allAccounts = await db.accounts.toArray();
   const allWatchlists = await db.watchlists.toArray();
   const allInvestmentPlans = await db.investmentPlans.toArray();
+  const availableAssets = isAssetConfigured() ? getAvailableAssets() : undefined;
+  const fundDailyEarnings = getAllFundDailyEarnings();
   const data = buildFundBackupPayload(
     allFunds,
     undefined,
@@ -1028,6 +1035,8 @@ export const exportFunds = async (): Promise<void> => {
     allWatchlists,
     allInvestmentPlans,
     investmentProfile,
+    availableAssets,
+    fundDailyEarnings,
   );
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1071,6 +1080,7 @@ export const exportFundsToJsonString = async (
   const allWatchlists = await db.watchlists.toArray();
   const allInvestmentPlans = await db.investmentPlans.toArray();
   const availableAssets = isAssetConfigured() ? getAvailableAssets() : undefined;
+  const fundDailyEarnings = getAllFundDailyEarnings();
   return JSON.stringify(
     buildFundBackupPayload(
       allFunds,
@@ -1080,6 +1090,7 @@ export const exportFundsToJsonString = async (
       allInvestmentPlans,
       investmentProfile,
       availableAssets,
+      fundDailyEarnings,
     ),
     null,
     2,
@@ -1099,6 +1110,7 @@ export const importFundsFromBackupContent = async (
     watchlists: importedWatchlists,
     investmentPlans: importedInvestmentPlans,
     availableAssets: importedAvailableAssets,
+    fundDailyEarnings: importedFundDailyEarnings,
   } = parseAndNormalizeFundBackupPayload(content);
 
   const importMode = options?.importMode ?? 'merge';
@@ -1169,6 +1181,10 @@ export const importFundsFromBackupContent = async (
         }
       },
     );
+
+    if (importedFundDailyEarnings !== undefined) {
+      replaceAllFundDailyEarnings(importedFundDailyEarnings);
+    }
 
     return {
       added:
@@ -1290,6 +1306,10 @@ export const importFundsFromBackupContent = async (
   // 合并模式下，如果导入数据包含可用资产配置则恢复
   if (importedAvailableAssets !== undefined) {
     setAvailableAssets(importedAvailableAssets);
+  }
+
+  if (importedFundDailyEarnings !== undefined) {
+    mergeFundDailyEarnings(importedFundDailyEarnings);
   }
 
   return { added, skipped };
