@@ -2248,6 +2248,10 @@ const buildHoldingsSnapshot = async (
   };
 };
 
+const resolvePublicMarketName = (code: string, fallbackName?: string) => {
+  return MARKET_INDEX_NAMES[code] || fallbackName || code;
+};
+
 type PublicNewsSummaryTone = 'positive' | 'negative' | 'neutral' | 'warning' | 'info';
 
 interface PublicNewsSummaryCard {
@@ -2347,8 +2351,12 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
   const topTrendItem = trendItems[0];
 
   const summaryLine = [
-    marketIndices[0] ? `${marketIndices[0].name}${formatPublicChangePct(marketIndices[0].changePct)}` : 'A 股指数暂无数据',
-    overseasItems[0] ? `外围${overseasItems[0].name}${formatPublicChangePct(overseasItems[0].changePct)}` : '外围市场暂无数据',
+    marketIndices[0]
+      ? `${resolvePublicMarketName(marketIndices[0].code, marketIndices[0].name)}${formatPublicChangePct(marketIndices[0].changePct)}`
+      : 'A 股指数暂无数据',
+    overseasItems[0]
+      ? `外围${resolvePublicMarketName(overseasItems[0].code, overseasItems[0].name)}${formatPublicChangePct(overseasItems[0].changePct)}`
+      : '外围市场暂无数据',
     topFlowItem ? `资金流${topFlowItem.name}` : '资金流暂无数据',
   ].join(' · ');
 
@@ -2358,7 +2366,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       value: marketIndices.length > 0 ? (topMarketAverage >= 0.5 ? '偏强' : topMarketAverage <= -0.5 ? '偏弱' : '中性') : '暂无数据',
       note:
         marketIndices.length > 0
-          ? `${marketIndices[0].name} ${formatPublicChangePct(marketIndices[0].changePct)}，均值 ${formatPublicChangePct(topMarketAverage)}`
+          ? `${resolvePublicMarketName(marketIndices[0].code, marketIndices[0].name)} ${formatPublicChangePct(marketIndices[0].changePct)}，均值 ${formatPublicChangePct(topMarketAverage)}`
           : 'A 股指数快照暂不可用',
       tone: marketIndices.length > 0 ? (topMarketAverage >= 0.5 ? 'positive' : topMarketAverage <= -0.5 ? 'negative' : 'neutral') : 'neutral',
     },
@@ -2401,7 +2409,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       description: '主要指数的即时强弱，用来判断今天情绪底色。',
       items: marketIndices.slice(0, 4).map((item) => ({
         tag: '指数',
-        title: `${item.name} ${formatPublicChangePct(item.changePct)}`,
+        title: `${resolvePublicMarketName(item.code, item.name)} ${formatPublicChangePct(item.changePct)}`,
         impact: item.changePct >= 0.5 ? '偏正面' : item.changePct <= -0.5 ? '偏负面' : '中性',
         relation: '用于判断盘面方向，不直接等于持仓涨跌。',
         time: formatPublicTime(item.updateTime),
@@ -2440,7 +2448,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       description: '美股、港股、A50、汇率等对次日开盘的扰动。',
       items: overseasItems.slice(0, 6).map((item) => ({
         tag: item.market,
-        title: `${item.name} ${formatPublicChangePct(item.changePct)}`,
+        title: `${resolvePublicMarketName(item.code, item.name)} ${formatPublicChangePct(item.changePct)}`,
         impact: item.changePct >= 0.5 ? '偏正面' : item.changePct <= -0.5 ? '偏负面' : '中性',
         relation: '主要作为明早开盘情绪参考。',
         time: formatPublicTime(item.updateTime),
