@@ -881,6 +881,52 @@ describe('telegram ai reminder worker', () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
 
+  it('Telegram 发送“预测”会触发明日涨跌预测问题', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '预测', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls[1]?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('养基AI明日涨跌预测');
+    const aiBody = findAiRequestBody(fetchMock);
+    expect(aiBody.messages[1].content).toContain('明日涨跌预测');
+    expect(aiBody.messages[1].content).toContain('条件化概率判断');
+    expect(aiBody.messages[1].content).toContain('结论、概率判断、主要依据、明天重点看什么、触发条件、失效条件、不确定项');
+    expect(aiBody.messages[1].content).toContain('不得写“必涨”“必跌”“一定”');
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
+  });
+
+  it('Telegram 发送“明天涨跌”会触发明日涨跌预测问题', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '明天涨跌', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls[1]?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('养基AI明日涨跌预测');
+    const aiBody = findAiRequestBody(fetchMock);
+    expect(aiBody.messages[1].content).toContain('明日涨跌预测');
+  });
+
   it('Telegram 短版分析会复用 Morningstar 持仓缓存', async () => {
     const customPayload = {
       ...backupPayload,

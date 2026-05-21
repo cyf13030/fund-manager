@@ -457,6 +457,8 @@ const MARKET_ANALYSIS_QUESTION =
   '请只做市场分析，控制在 1000 字以内。重点分析 A 股市场环境、主要指数强弱、中文财经新闻、行业/概念资金流方向，以及这些信息对当前持仓的潜在影响。建仓部分只输出主题观察方向，不推荐具体基金名称或基金代码。若市场数据、新闻或资金流缺失，必须明确说明数据缺失，不得编造。请按“市场情绪、指数强弱、资金流方向、消息面影响、持仓影响、今日观察主题、风险提示”输出。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
 const UP_DOWN_REASON_QUESTION =
   '请只做今天涨跌归因分析，控制在 800 字以内。必须先判断当前是更偏上涨、下跌还是震荡，再分别说明“今天为什么涨/跌”的主要原因。结论必须基于 A 股市场、中文财经新闻、行业/概念资金流、当前持仓暴露和量化信号，不能只复述数据。请按“结论、上涨/下跌原因、当前信号、证据、不确定项”输出；如果数据不足，必须明确写出缺失项，不能编造原因。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
+const TOMORROW_PREDICTION_QUESTION =
+  '请只做明日涨跌预测，控制在 900 字以内。必须明确这是基于现有数据的条件化概率判断，不得写“必涨”“必跌”“一定”。请先给出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”；必须结合 A 股市场状态、中文财经新闻、行业/概念资金流、当前持仓底层暴露、近几日组合收益趋势和量化信号。请按“结论、概率判断、主要依据、明天重点看什么、触发条件、失效条件、不确定项”输出；如果市场、新闻、资金流、底层持仓或近几日收益数据缺失，必须明确说明并降低置信度，不能编造。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings、fundDailyEarnings、marketSnapshot 等内部字段名。';
 const DETAILED_ANALYSIS_QUESTION = DEFAULT_AI_QUESTION;
 const MIDDAY_ANALYSIS_QUESTION =
   '请输出午盘休息分析，控制在 1000 字以内。重点总结上午市场情绪、A 股指数强弱、资金流入最强方向、中文财经新闻利好/风险，并判断下午是否适合观察、低吸、小额试探或暂不操作。建仓主题观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合。如果没有明确主题，必须输出“午盘建仓主题观察”，给出 1-3 个下午观察方向和触发条件，不得硬写买入建议。午盘不做激进操作建议，不要建议清仓。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
@@ -488,6 +490,9 @@ const COMMAND_QUESTION_MAP: Record<string, { question: string; maxLength?: numbe
   分析: { question: SHORT_ANALYSIS_QUESTION, maxLength: 900 },
   市场分析: { question: MARKET_ANALYSIS_QUESTION, maxLength: 1200, title: '养基AI市场分析' },
   涨跌: { question: UP_DOWN_REASON_QUESTION, maxLength: 900, title: '养基AI涨跌归因' },
+  预测: { question: TOMORROW_PREDICTION_QUESTION, maxLength: 1000, title: '养基AI明日涨跌预测' },
+  明天涨跌: { question: TOMORROW_PREDICTION_QUESTION, maxLength: 1000, title: '养基AI明日涨跌预测' },
+  明天预测: { question: TOMORROW_PREDICTION_QUESTION, maxLength: 1000, title: '养基AI明日涨跌预测' },
   详细分析: { question: DETAILED_ANALYSIS_QUESTION },
   加仓: {
     question:
@@ -516,7 +521,7 @@ const INTRADAY_PROFIT_COMMANDS = ['今日盘中实时收益', '盘中实时收�
 const DETAILED_INTRADAY_PROFIT_COMMANDS = ['详细盘中收益', '详细实时收益'];
 const QUANT_ANALYSIS_COMMANDS = ['量化分析', '量化信号', '基金量化'];
 const TELEGRAM_HELP_TEXT =
-  '发送“分析”获取短版判断；发送“市场分析”获取市场环境判断；发送“涨跌”获取今天为什么涨/跌和当前信号；发送“量化分析”获取客观量化信号；发送“详细分析”获取完整分析；也可发送“建仓”“加仓”“减仓”“清仓”获取专项判断。';
+  '发送“分析”获取短版判断；发送“市场分析”获取市场环境判断；发送“涨跌”获取今天为什么涨/跌和当前信号；发送“预测”获取明日涨跌条件化判断；发送“量化分析”获取客观量化信号；发送“详细分析”获取完整分析；也可发送“建仓”“加仓”“减仓”“清仓”获取专项判断。';
 const TELEGRAM_ANALYSIS_PENDING_TEXT = '收到，正在结合市场情绪、资金流和持仓分析...';
 const QUANT_SIGNAL_CACHE_TTL_MS = 60 * 60 * 1000;
 const QUANT_NAV_PAGE_SIZE = 20;
@@ -2716,7 +2721,8 @@ const buildAnalysisMessage = async (
   const isShortAnalysis =
     options?.question === SHORT_ANALYSIS_QUESTION ||
     options?.question === MARKET_ANALYSIS_QUESTION ||
-    options?.question === UP_DOWN_REASON_QUESTION;
+    options?.question === UP_DOWN_REASON_QUESTION ||
+    options?.question === TOMORROW_PREDICTION_QUESTION;
   const snapshotStartedAt = Date.now();
   const snapshot = await buildHoldingsSnapshot(payload, {
     holdingsTimeoutMs: isShortAnalysis ? FAST_ANALYSIS_FUND_HOLDINGS_TIMEOUT_MS : DEFAULT_FUND_HOLDINGS_TIMEOUT_MS,
