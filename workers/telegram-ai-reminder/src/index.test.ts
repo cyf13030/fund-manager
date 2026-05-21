@@ -843,6 +843,31 @@ describe('telegram ai reminder worker', () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
 
+  it('Telegram 发送“涨跌”会触发独立涨跌归因问题', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '涨跌', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls[1]?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('养基AI涨跌归因');
+    const aiBody = findAiRequestBody(fetchMock);
+    expect(aiBody.messages[1].content).toContain('今天涨跌归因分析');
+    expect(aiBody.messages[1].content).toContain('结论、上涨/下跌原因、当前信号、证据、不确定项');
+    expect(aiBody.messages[1].content).toContain('不能只复述数据');
+    expect(aiBody.messages[1].content).not.toContain('简短但全面');
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
+  });
+
   it('Telegram 短版分析会复用 Morningstar 持仓缓存', async () => {
     const customPayload = {
       ...backupPayload,
