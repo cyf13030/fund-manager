@@ -1578,7 +1578,7 @@ const parseTencentMarketLine = (line: string): MarketIndexSnapshot | null => {
   if (!code || !rawRightSide) return null;
 
   const parts = rawRightSide.replace(/"/g, '').split('~');
-  const name = parts[1] || MARKET_INDEX_NAMES[code] || code;
+  const name = MARKET_INDEX_NAMES[code] || parts[1] || code;
   const price = Number.parseFloat(parts[3] || '');
   const changePct = Number.parseFloat(parts[32] || '');
   const change = Number.parseFloat(parts[31] || '');
