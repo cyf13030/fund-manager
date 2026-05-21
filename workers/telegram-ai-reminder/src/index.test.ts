@@ -160,18 +160,18 @@ const eastMoneyHistoricalNavText = `var apidata={content:"<table>${Array.from({ 
 const eastMoneyFundPageText =
   '类型：混合型-灵活 | 中高风险 规模：26.44亿元（2026-03-31）基金经理：郑晓辉等 成 立 日：2001-12-18 管 理 人：华夏基金 基金评级： 购买手续费：1.50% 0.15% 1.0折';
 
-const eastMoneyNewsPayload = {
+const buildEastMoneyNewsPayload = () => ({
   data: {
     list: [
       {
         title: 'A股人工智能板块午后走强',
         mediaName: '东方财富',
         url: 'https://finance.eastmoney.com/a/test.html',
-        showTime: '2026-05-18 12:00:00',
+        showTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
       },
     ],
   },
-};
+});
 
 const sinaNewsPayload = {
   result: {
@@ -292,7 +292,7 @@ const jsonResponse = (body: unknown, status = 200) =>
 
 const mockBaseSuccessfulFetches = (
   fetchMock: ReturnType<typeof vi.fn>,
-  eastMoneyNews = eastMoneyNewsPayload,
+  eastMoneyNews = buildEastMoneyNewsPayload(),
   sinaNews = sinaNewsPayload,
 ) => {
   fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -325,7 +325,9 @@ const mockBaseSuccessfulFetches = (
     }
     if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNews));
     if (url.includes('chat/completions')) {
-      return Promise.resolve(jsonResponse({ choices: [{ message: { content: '组合整体表现良好。' } }] }));
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: '组合整体表现良好。' } }] }),
+      );
     }
     if (url.includes('generativelanguage.googleapis.com')) {
       return Promise.resolve(
@@ -340,7 +342,9 @@ const mockBaseSuccessfulFetches = (
 const findAiRequestBody = (fetchMock: ReturnType<typeof vi.fn>) => {
   const call = fetchMock.mock.calls.find((item) => String(item[0]).includes('/chat/completions'));
   if (!call) throw new Error('AI request not found');
-  return JSON.parse(call[1].body as string) as { messages: Array<{ role: string; content: string }> };
+  return JSON.parse(call[1].body as string) as {
+    messages: Array<{ role: string; content: string }>;
+  };
 };
 
 const waitForScheduledTasks = async (tasks: Promise<unknown>[]) => {
@@ -574,11 +578,21 @@ describe('telegram ai reminder worker', () => {
     expect(body).toEqual({ ok: true, holdings: 1, totalAssets: 120, sentMessages: 1 });
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.github.com/gists/gist-id',
-      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer github-token' }) }),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer github-token' }),
+      }),
     );
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('https://qt.gtimg.cn/q='))).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://www.morningstar.cn/cn-api/v2/funds/000001/holdings',
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: 'application/json' }) }),
+    );
     expect(
-      fetchMock.mock.calls.some((call) => String(call[0]).includes('https://np-listapi.eastmoney.com')),
+      fetchMock.mock.calls.some((call) => String(call[0]).includes('https://qt.gtimg.cn/q=')),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes('https://np-listapi.eastmoney.com'),
+      ),
     ).toBe(true);
     const aiBody = findAiRequestBody(fetchMock);
     expect(aiBody.messages[0].content).toContain('测试基金A');
@@ -632,7 +646,9 @@ describe('telegram ai reminder worker', () => {
     };
     expect(statePayload.fundProfiles['000001']?.profile.fundType).toBe('混合型-灵活');
     expect(aiBody.messages[0].content).toContain('今日加仓候选');
-    expect(aiBody.messages[0].content).toContain('不得编造新闻标题、财报数据、公告内容或资金流数据');
+    expect(aiBody.messages[0].content).toContain(
+      '不得编造新闻标题、财报数据、公告内容或资金流数据',
+    );
     expect(aiBody.messages[0].content).toContain('不要编造不存在的数据');
     expect(aiBody.messages[0].content).toContain('buildCandidates');
     expect(aiBody.messages[0].content).toContain('未持有基金B');
@@ -642,7 +658,9 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('收盘后写“明日观察点”，收盘前写“今日观察点”');
     expect(aiBody.messages[1].content).toContain('是否适合加仓');
 
-    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes('api.telegram.org'),
+    );
     expect(telegramCall).toBeTruthy();
     const telegramBody = JSON.parse(telegramCall?.[1].body as string) as {
       chat_id: string;
@@ -849,16 +867,20 @@ describe('telegram ai reminder worker', () => {
       }
       if (url.includes('api.github.com/gists')) {
         return Promise.resolve(
-          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+          jsonResponse({
+            files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } },
+          }),
         );
       }
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
-      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(emptyEastMoneyNewsPayload));
+      if (url.includes('np-listapi.eastmoney.com'))
+        return Promise.resolve(jsonResponse(emptyEastMoneyNewsPayload));
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
         return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
       }
-      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(emptySinaNewsPayload));
+      if (url.includes('feed.mix.sina.com.cn'))
+        return Promise.resolve(jsonResponse(emptySinaNewsPayload));
       if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
       return Promise.resolve(jsonResponse({}));
     });
@@ -889,7 +911,11 @@ describe('telegram ai reminder worker', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(fetchMock.mock.calls.some((call) => call[0] === 'https://api.deepseek.com/v1/chat/completions')).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        (call) => call[0] === 'https://api.deepseek.com/v1/chat/completions',
+      ),
+    ).toBe(true);
   });
 
   it('Gemini provider 使用 Gemini REST API', async () => {
@@ -917,7 +943,9 @@ describe('telegram ai reminder worker', () => {
       const url = String(input);
       if (url.includes('api.github.com/gists')) {
         return Promise.resolve(
-          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+          jsonResponse({
+            files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } },
+          }),
         );
       }
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
@@ -926,9 +954,12 @@ describe('telegram ai reminder worker', () => {
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
         return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
       }
-      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('feed.mix.sina.com.cn'))
+        return Promise.resolve(jsonResponse(sinaNewsPayload));
       if (url.includes('chat/completions')) {
-        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '部分失败分析' } }] }));
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: '部分失败分析' } }] }),
+        );
       }
       if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
       return Promise.resolve(jsonResponse({}));
@@ -968,7 +999,9 @@ describe('telegram ai reminder worker', () => {
       const url = String(input);
       if (url.includes('api.github.com/gists')) {
         return Promise.resolve(
-          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+          jsonResponse({
+            files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } },
+          }),
         );
       }
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
@@ -1003,18 +1036,24 @@ describe('telegram ai reminder worker', () => {
       const url = String(input);
       if (url.includes('api.github.com/gists')) {
         return Promise.resolve(
-          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+          jsonResponse({
+            files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } },
+          }),
         );
       }
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
-      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('np-listapi.eastmoney.com'))
+        return Promise.resolve(jsonResponse(buildEastMoneyNewsPayload()));
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
         return Promise.resolve(jsonResponse({}, 500));
       }
-      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('feed.mix.sina.com.cn'))
+        return Promise.resolve(jsonResponse(sinaNewsPayload));
       if (url.includes('chat/completions')) {
-        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '资金流失败分析' } }] }));
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: '资金流失败分析' } }] }),
+        );
       }
       if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
       return Promise.resolve(jsonResponse({}));
@@ -1094,10 +1133,18 @@ describe('telegram ai reminder worker', () => {
     expect(body.ok).toBe(true);
     expect(body.handled).toBe('analysis');
     expect(body.sentMessages).toBe(2);
-    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes('api.telegram.org'),
+    );
     expect(telegramCalls).toHaveLength(2);
-    const pendingBody = JSON.parse(telegramCalls[0]?.[1].body as string) as { chat_id: string; text: string };
-    const telegramBody = JSON.parse(telegramCalls[1]?.[1].body as string) as { chat_id: string; text: string };
+    const pendingBody = JSON.parse(telegramCalls[0]?.[1].body as string) as {
+      chat_id: string;
+      text: string;
+    };
+    const telegramBody = JSON.parse(telegramCalls[1]?.[1].body as string) as {
+      chat_id: string;
+      text: string;
+    };
     expect(pendingBody.chat_id).toBe('123456');
     expect(pendingBody.text).toBe('收到，正在结合市场情绪、资金流和持仓分析...');
     expect(telegramBody.chat_id).toBe('123456');
@@ -1632,13 +1679,17 @@ describe('telegram ai reminder worker', () => {
       }
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
-      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('np-listapi.eastmoney.com'))
+        return Promise.resolve(jsonResponse(buildEastMoneyNewsPayload()));
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
         return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
       }
-      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('feed.mix.sina.com.cn'))
+        return Promise.resolve(jsonResponse(sinaNewsPayload));
       if (url.includes('chat/completions')) {
-        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '兜底建仓分析' } }] }));
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: '兜底建仓分析' } }] }),
+        );
       }
       if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
       return Promise.resolve(jsonResponse({}));
@@ -1671,20 +1722,26 @@ describe('telegram ai reminder worker', () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('chat/completions')) {
-        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '分析'.repeat(1200) } }] }));
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: '分析'.repeat(1200) } }] }),
+        );
       }
       if (url.includes('api.github.com/gists')) {
         return Promise.resolve(
-          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+          jsonResponse({
+            files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } },
+          }),
         );
       }
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
-      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('np-listapi.eastmoney.com'))
+        return Promise.resolve(jsonResponse(buildEastMoneyNewsPayload()));
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
         return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
       }
-      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('feed.mix.sina.com.cn'))
+        return Promise.resolve(jsonResponse(sinaNewsPayload));
       if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
       return Promise.resolve(jsonResponse({}));
     });
@@ -1699,7 +1756,9 @@ describe('telegram ai reminder worker', () => {
     );
 
     expect(response.status).toBe(200);
-    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes('api.telegram.org'),
+    );
     const pendingBody = JSON.parse(telegramCalls[0]?.[1].body as string) as { text: string };
     const telegramBody = JSON.parse(telegramCalls[1]?.[1].body as string) as { text: string };
     expect(pendingBody.text).toBe('收到，正在结合市场情绪、资金流和持仓分析...');
@@ -1728,7 +1787,9 @@ describe('telegram ai reminder worker', () => {
     expect(body.ok).toBe(false);
     expect(body.handled).toBe('analysis');
     expect(body.sentMessages).toBe(2);
-    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes('api.telegram.org'),
+    );
     expect(telegramCalls).toHaveLength(2);
     const pendingBody = JSON.parse(telegramCalls[0]?.[1].body as string) as { text: string };
     const failureBody = JSON.parse(telegramCalls[1]?.[1].body as string) as { text: string };
@@ -1742,17 +1803,17 @@ describe('telegram ai reminder worker', () => {
     vi.stubGlobal('fetch', fetchMock);
     const tasks: Promise<unknown>[] = [];
 
-    await worker.scheduled(
-      { scheduledTime: Date.now(), cron: '35 3 * * 1-5' },
-      env,
-      { waitUntil: (promise: Promise<unknown>) => tasks.push(promise) },
-    );
+    await worker.scheduled({ scheduledTime: Date.now(), cron: '35 3 * * 1-5' }, env, {
+      waitUntil: (promise: Promise<unknown>) => tasks.push(promise),
+    });
     await waitForScheduledTasks(tasks);
 
     const aiBody = findAiRequestBody(fetchMock);
     expect(aiBody.messages[1].content).toContain('午盘休息分析');
     expect(aiBody.messages[1].content).toContain('下午是否适合观察、低吸、小额试探或暂不操作');
-    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes('api.telegram.org'),
+    );
     const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
     expect(telegramBody.text).toContain('养基AI午盘休息分析');
   });
@@ -1763,17 +1824,17 @@ describe('telegram ai reminder worker', () => {
     vi.stubGlobal('fetch', fetchMock);
     const tasks: Promise<unknown>[] = [];
 
-    await worker.scheduled(
-      { scheduledTime: Date.now(), cron: '30 6 * * 1-5' },
-      env,
-      { waitUntil: (promise: Promise<unknown>) => tasks.push(promise) },
-    );
+    await worker.scheduled({ scheduledTime: Date.now(), cron: '30 6 * * 1-5' }, env, {
+      waitUntil: (promise: Promise<unknown>) => tasks.push(promise),
+    });
     await waitForScheduledTasks(tasks);
 
     const aiBody = findAiRequestBody(fetchMock);
     expect(aiBody.messages[1].content).toContain('尾盘半小时操作提醒');
     expect(aiBody.messages[1].content).toContain('14:50 前是否加仓、是否减仓');
-    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes('api.telegram.org'),
+    );
     const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
     expect(telegramBody.text).toContain('养基AI尾盘操作提醒');
   });
@@ -1784,11 +1845,9 @@ describe('telegram ai reminder worker', () => {
     vi.stubGlobal('fetch', fetchMock);
     const tasks: Promise<unknown>[] = [];
 
-    await worker.scheduled(
-      { scheduledTime: Date.now(), cron: '0 7 * * 1-5' },
-      env,
-      { waitUntil: (promise: Promise<unknown>) => tasks.push(promise) },
-    );
+    await worker.scheduled({ scheduledTime: Date.now(), cron: '0 7 * * 1-5' }, env, {
+      waitUntil: (promise: Promise<unknown>) => tasks.push(promise),
+    });
     await waitForScheduledTasks(tasks);
 
     const aiBody = findAiRequestBody(fetchMock);
@@ -1870,7 +1929,9 @@ describe('telegram ai reminder worker', () => {
 
     expect(response.status).toBe(200);
     expect(body).toEqual({ ok: true, ignored: true });
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(false);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(
+      false,
+    );
   });
 
   it('QQ 官方授权用户群内触发分析会两段式回复', async () => {
@@ -1884,18 +1945,24 @@ describe('telegram ai reminder worker', () => {
       }
       if (url.includes('api.github.com/gists')) {
         return Promise.resolve(
-          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+          jsonResponse({
+            files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } },
+          }),
         );
       }
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
-      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('np-listapi.eastmoney.com'))
+        return Promise.resolve(jsonResponse(buildEastMoneyNewsPayload()));
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
         return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
       }
-      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('feed.mix.sina.com.cn'))
+        return Promise.resolve(jsonResponse(sinaNewsPayload));
       if (url.includes('chat/completions')) {
-        return Promise.resolve(jsonResponse({ choices: [{ message: { content: 'QQ 分析结果' } }] }));
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: 'QQ 分析结果' } }] }),
+        );
       }
       return Promise.resolve(jsonResponse({}));
     });
@@ -1983,27 +2050,36 @@ describe('telegram ai reminder worker', () => {
 
     expect(response.status).toBe(200);
     expect(body).toEqual({ ok: true, ignored: true });
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(false);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('chat/completions'))).toBe(
+      false,
+    );
   });
 
   it('OneBot 授权用户群内触发分析会两段式回复', async () => {
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('onebot.example/send_group_msg')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.includes('onebot.example/send_group_msg'))
+        return Promise.resolve(jsonResponse({ status: 'ok' }));
       if (url.includes('api.github.com/gists')) {
         return Promise.resolve(
-          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } } }),
+          jsonResponse({
+            files: { 'fund-manager-sync.json': { content: JSON.stringify(backupPayload) } },
+          }),
         );
       }
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
-      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('np-listapi.eastmoney.com'))
+        return Promise.resolve(jsonResponse(buildEastMoneyNewsPayload()));
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
         return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
       }
-      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('feed.mix.sina.com.cn'))
+        return Promise.resolve(jsonResponse(sinaNewsPayload));
       if (url.includes('chat/completions')) {
-        return Promise.resolve(jsonResponse({ choices: [{ message: { content: 'OneBot 分析结果' } }] }));
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: 'OneBot 分析结果' } }] }),
+        );
       }
       return Promise.resolve(jsonResponse({}));
     });
@@ -2025,13 +2101,21 @@ describe('telegram ai reminder worker', () => {
     expect(body.ok).toBe(true);
     expect(body.handled).toBe('analysis');
     expect(body.sentMessages).toBe(2);
-    const oneBotCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('onebot.example/send_group_msg'));
+    const oneBotCalls = fetchMock.mock.calls.filter((call) =>
+      String(call[0]).includes('onebot.example/send_group_msg'),
+    );
     expect(oneBotCalls).toHaveLength(2);
     expect(oneBotCalls[0]?.[1].headers).toEqual(
       expect.objectContaining({ Authorization: 'Bearer onebot-token' }),
     );
-    const pendingBody = JSON.parse(oneBotCalls[0]?.[1].body as string) as { group_id: number; message: string };
-    const analysisBody = JSON.parse(oneBotCalls[1]?.[1].body as string) as { group_id: number; message: string };
+    const pendingBody = JSON.parse(oneBotCalls[0]?.[1].body as string) as {
+      group_id: number;
+      message: string;
+    };
+    const analysisBody = JSON.parse(oneBotCalls[1]?.[1].body as string) as {
+      group_id: number;
+      message: string;
+    };
     expect(pendingBody).toEqual({
       group_id: 123456789,
       message: '收到，正在结合市场情绪、资金流和持仓分析...',
@@ -2259,8 +2343,12 @@ describe('telegram ai reminder worker', () => {
 
     expect(response.status).toBe(200);
     expect(body).toEqual({ ok: true, handled: 'help', sentMessages: 1 });
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/chat/completions'))).toBe(false);
-    const telegramCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('api.telegram.org'));
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/chat/completions'))).toBe(
+      false,
+    );
+    const telegramCall = fetchMock.mock.calls.find((call) =>
+      String(call[0]).includes('api.telegram.org'),
+    );
     const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
     expect(telegramBody.text).toContain('发送“分析”');
     expect(telegramBody.text).toContain('建仓');

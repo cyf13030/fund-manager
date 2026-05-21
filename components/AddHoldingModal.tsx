@@ -13,6 +13,7 @@ import type { MorningstarFund, Fund, WatchlistItem } from '../types';
 import { fetchFundCommonData } from '../services/api';
 import { isValidIsoDate } from '../services/dateInput';
 import { ModalShell } from './ModalShell';
+import { deductAvailableForBuy } from '../services/assetAllocation';
 import { syncNowWithAutoGist } from '../services/gistAutoSync';
 
 interface AddHoldingModalProps {
@@ -291,6 +292,9 @@ export const AddHoldingModal: React.FC<AddHoldingModalProps> = ({
         positionOpenDate: buyDate || undefined,
       });
 
+      // 从活期可用资产中扣除投入金额，保持总资产不变
+      const deductAmount = !isNaN(valAmount) ? valAmount : valShares * effectiveCostPrice;
+      deductAvailableForBuy(deductAmount);
       syncNowWithAutoGist();
 
       onClose();
