@@ -22,7 +22,9 @@ vi.mock('../gistSync/index', () => ({
 import {
   checkAutoGistSyncNow,
   getAutoGistSyncStatus,
+  markAutoGistSyncUploaded,
   syncNowWithAutoGist,
+  syncNowWithAutoGistImmediately,
   updateAutoGistTargetSnapshot,
   withAutoGistSyncSuppressed,
 } from '../gistAutoSync';
@@ -82,7 +84,37 @@ describe('gistAutoSync', () => {
       JSON.stringify({
         autoGistSync: true,
         githubToken: 'ghp_testtoken1234567890',
-        gistAutoSyncDirty: true,
+        defaultGistTarget: {
+          id: 'gist-1',
+          description: '默认备份',
+          updatedAt: '2026-03-20T00:00:00Z',
+          fileName: 'fund-manager-sync.json',
+        },
+      }),
+    );
+    localStorage.setItem('fundManager.gistAutoSyncStatus', JSON.stringify({ dirty: true }));
+    mockedDeps.exportFundsToJsonString.mockResolvedValue('{"version":1}');
+    mockedDeps.overwriteSyncGist.mockResolvedValue({
+      id: 'gist-1',
+      description: '默认备份',
+      updated_at: '2026-03-21T00:00:00Z',
+      hasSyncFile: true,
+      files: {},
+    });
+
+    await checkAutoGistSyncNow();
+
+    expect(mockedDeps.exportFundsToJsonString).toHaveBeenCalledTimes(1);
+    expect(mockedDeps.overwriteSyncGist).toHaveBeenCalledTimes(1);
+    expect(getAutoGistSyncStatus().dirty).toBe(false);
+  });
+
+  it('uploads immediately when requested explicitly', async () => {
+    localStorage.setItem(
+      'app-settings-preference',
+      JSON.stringify({
+        autoGistSync: true,
+        githubToken: 'ghp_testtoken1234567890',
         defaultGistTarget: {
           id: 'gist-1',
           description: '默认备份',
@@ -100,11 +132,34 @@ describe('gistAutoSync', () => {
       files: {},
     });
 
-    await checkAutoGistSyncNow();
+    await syncNowWithAutoGistImmediately();
 
     expect(mockedDeps.exportFundsToJsonString).toHaveBeenCalledTimes(1);
-    expect(mockedDeps.overwriteSyncGist).toHaveBeenCalledTimes(1);
-    expect(getAutoGistSyncStatus().dirty).toBe(false);
+    expect(getAutoGistSyncStatus()).toMatchObject({ dirty: false, lastError: undefined });
+  });
+
+  it('marks manual upload as synced without relying on settings storage', () => {
+    localStorage.setItem(
+      'app-settings-preference',
+      JSON.stringify({
+        autoGistSync: true,
+        githubToken: 'ghp_testtoken1234567890',
+      }),
+    );
+    localStorage.setItem('fundManager.gistAutoSyncStatus', JSON.stringify({ dirty: true }));
+
+    markAutoGistSyncUploaded({
+      id: 'gist-2',
+      description: '手动备份',
+      updatedAt: '2026-03-22T00:00:00Z',
+      fileName: 'fund-manager-sync.json',
+    });
+
+    expect(getAutoGistSyncStatus()).toMatchObject({ dirty: false, lastError: undefined });
+    const storedSettings = JSON.parse(localStorage.getItem('app-settings-preference') || '{}') as {
+      defaultGistTarget?: { id: string };
+    };
+    expect(storedSettings.defaultGistTarget?.id).toBe('gist-2');
   });
 
   it('records visible error when auto sync lacks default target', async () => {

@@ -6,9 +6,11 @@ import { useTheme } from '../services/ThemeContext';
 import { useSettings } from '../services/SettingsContext';
 import {
   getAutoGistSyncStatus,
+  markAutoGistSyncUploaded,
   subscribeAutoGistSyncStatus,
-  syncNowWithAutoGist,
+  syncNowWithAutoGistImmediately,
   updateAutoGistTargetSnapshot,
+  withAutoGistSyncSuppressed,
   type AutoGistSyncStatus,
 } from '../services/gistAutoSync';
 import {
@@ -32,7 +34,6 @@ import {
 import { GistSyncChooserCard } from './GistSyncChooserCard';
 import { AnimatedSwitcher } from './transitions/AnimatedSwitcher';
 import { getConfiguredLlmProviders } from '../services/aiProviderConfig';
-import { withAutoGistSyncSuppressed } from '../services/gistAutoSync';
 
 interface SettingsPageProps {
   onBack?: () => void;
@@ -146,7 +147,23 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
       return;
     }
 
-    window.setTimeout(() => syncNowWithAutoGist(), 0);
+    window.setTimeout(() => void syncNowWithAutoGistImmediately(), 0);
+  };
+
+  const handleImmediateAutoGistSync = () => {
+    if (!githubToken.trim()) {
+      alert('请先填写 GitHub Token。');
+      return;
+    }
+
+    if (!defaultGistTarget) {
+      setGistChooserMode('upload');
+      setGistChooserOpen(true);
+      alert('请先选择或创建默认 Gist 备份。');
+      return;
+    }
+
+    void syncNowWithAutoGistImmediately();
   };
 
   useEffect(() => {
@@ -376,6 +393,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
             });
 
       saveDefaultTarget(saved);
+      markAutoGistSyncUploaded({
+        id: saved.id,
+        description: saved.description,
+        updatedAt: saved.updated_at,
+        fileName: GIST_SYNC_FILENAME,
+      });
       alert(t('common.gistSyncUploadSuccess') || '上传到 gist 成功。');
       setGistChooserOpen(false);
       await refreshSyncGists(githubToken);
@@ -1006,17 +1029,27 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, initialShowA
           </div>
 
           <div className="mt-3 rounded-2xl border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] px-4 py-3 text-sm text-[var(--app-shell-muted)]">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span>
-                状态：
-                {autoSyncStatus.syncing
-                  ? '同步中'
-                  : autoSyncStatus.dirty
-                    ? '待上传'
-                    : '已同步'}
-              </span>
-              <span>上次成功：{formatSyncTime(autoSyncStatus.lastSuccessAt)}</span>
-              <span>上次尝试：{formatSyncTime(autoSyncStatus.lastAttemptAt)}</span>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span>
+                  状态：
+                  {autoSyncStatus.syncing
+                    ? '同步中'
+                    : autoSyncStatus.dirty
+                      ? '待上传'
+                      : '已同步'}
+                </span>
+                <span>上次成功：{formatSyncTime(autoSyncStatus.lastSuccessAt)}</span>
+                <span>上次尝试：{formatSyncTime(autoSyncStatus.lastAttemptAt)}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleImmediateAutoGistSync}
+                disabled={autoSyncStatus.syncing}
+                className="rounded-full border border-[var(--app-shell-line)] px-3 py-1 text-xs font-semibold text-[var(--app-shell-ink)] transition hover:border-[var(--app-shell-line-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                立即同步
+              </button>
             </div>
             {autoSyncStatus.lastError && (
               <div className="mt-2 text-xs font-medium text-red-500 dark:text-red-300">

@@ -18,10 +18,13 @@ interface StoredAutoSyncSettings {
   githubToken?: string;
   defaultGistTarget?: StoredDefaultGistTarget | null;
   investmentProfile?: unknown;
-  gistAutoSyncDirty?: boolean;
-  gistAutoSyncLastAttemptAt?: string;
-  gistAutoSyncLastSuccessAt?: string;
-  gistAutoSyncLastError?: string;
+}
+
+interface StoredAutoSyncState {
+  dirty?: boolean;
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  lastError?: string;
 }
 
 export interface AutoGistSyncStatus {
@@ -33,6 +36,7 @@ export interface AutoGistSyncStatus {
 }
 
 const STORAGE_KEY = 'app-settings-preference';
+const STATUS_STORAGE_KEY = 'fundManager.gistAutoSyncStatus';
 const AUTO_SYNC_DEBOUNCE_MS = 1500;
 
 let debounceTimer: number | null = null;
@@ -74,13 +78,41 @@ const writeStoredSettingsPatch = (patch: Partial<StoredAutoSyncSettings>) => {
   }
 };
 
+const readStoredStatus = (): StoredAutoSyncState => {
+  if (!isBrowser()) return {};
+  try {
+    const raw = localStorage.getItem(STATUS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as StoredAutoSyncState;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeStoredStatusPatch = (patch: Partial<StoredAutoSyncState>) => {
+  if (!isBrowser()) return;
+  try {
+    const current = readStoredStatus();
+    localStorage.setItem(
+      STATUS_STORAGE_KEY,
+      JSON.stringify({
+        ...current,
+        ...patch,
+      }),
+    );
+  } catch {
+    // 忽略状态写入失败，不影响主同步流程
+  }
+};
+
 const emitStatusChange = () => {
   if (!isBrowser()) return;
   window.dispatchEvent(new Event(STATUS_EVENT));
 };
 
-const writeAutoSyncStatus = (patch: Partial<StoredAutoSyncSettings>) => {
-  writeStoredSettingsPatch(patch);
+const writeAutoSyncStatus = (patch: Partial<StoredAutoSyncState>) => {
+  writeStoredStatusPatch(patch);
   emitStatusChange();
 };
 
@@ -98,11 +130,13 @@ const getErrorMessage = (error: unknown) => {
 };
 
 const markSyncSuccess = (target: StoredDefaultGistTarget) => {
+  const now = new Date().toISOString();
+  writeStoredDefaultTarget(target);
   writeAutoSyncStatus({
-    defaultGistTarget: target,
-    gistAutoSyncDirty: false,
-    gistAutoSyncLastSuccessAt: new Date().toISOString(),
-    gistAutoSyncLastError: '',
+    dirty: false,
+    lastAttemptAt: now,
+    lastSuccessAt: now,
+    lastError: '',
   });
 };
 
@@ -130,17 +164,20 @@ const performAutoSync = async () => {
   const token = settings.githubToken?.trim();
   const target = settings.defaultGistTarget;
   if (!token) {
-    writeAutoSyncStatus({ gistAutoSyncLastError: '请先填写 GitHub Token。' });
+    writeAutoSyncStatus({ lastAttemptAt: new Date().toISOString(), lastError: '请先填写 GitHub Token。' });
     return;
   }
 
   if (!target?.id) {
-    writeAutoSyncStatus({ gistAutoSyncLastError: '请先选择或创建默认 Gist 备份。' });
+    writeAutoSyncStatus({
+      lastAttemptAt: new Date().toISOString(),
+      lastError: '请先选择或创建默认 Gist 备份。',
+    });
     return;
   }
 
-  writeAutoSyncStatus({ gistAutoSyncLastAttemptAt: new Date().toISOString() });
-  const hasLocalChanges = pending || settings.gistAutoSyncDirty === true;
+  writeAutoSyncStatus({ lastAttemptAt: new Date().toISOString(), lastError: '' });
+  const hasLocalChanges = pending || readStoredStatus().dirty === true;
 
   if (hasLocalChanges) {
     pending = false;
@@ -151,7 +188,7 @@ const performAutoSync = async () => {
   const gists = await listSyncGists(token);
   const remoteTarget = gists.find((item) => item.id === target.id);
   if (!remoteTarget) {
-    writeAutoSyncStatus({ gistAutoSyncLastError: '默认 Gist 不存在，请重新选择上传目标。' });
+    writeAutoSyncStatus({ lastError: '默认 Gist 不存在，请重新选择上传目标。' });
     return;
   }
 
@@ -189,6 +226,10 @@ export const updateAutoGistTargetSnapshot = (target: StoredDefaultGistTarget | n
   writeStoredDefaultTarget(target);
 };
 
+export const markAutoGistSyncUploaded = (target: StoredDefaultGistTarget) => {
+  markSyncSuccess(target);
+};
+
 const runAutoSync = async () => {
   if (!isBrowser() || suppressCount > 0) return;
   if (inFlight) {
@@ -201,7 +242,7 @@ const runAutoSync = async () => {
       await performAutoSync();
     } catch (error) {
       console.warn('自动同步 GitHub Gist 失败', error);
-      writeAutoSyncStatus({ gistAutoSyncLastError: getErrorMessage(error) });
+      writeAutoSyncStatus({ lastError: getErrorMessage(error) });
     }
   })();
 
@@ -219,7 +260,7 @@ const runAutoSync = async () => {
 export const scheduleAutoGistSync = () => {
   if (!isBrowser() || suppressCount > 0) return;
   pending = true;
-  writeAutoSyncStatus({ gistAutoSyncDirty: true, gistAutoSyncLastError: '' });
+  writeAutoSyncStatus({ dirty: true, lastError: '' });
   if (debounceTimer !== null) {
     window.clearTimeout(debounceTimer);
   }
@@ -233,17 +274,28 @@ export const syncNowWithAutoGist = () => {
   scheduleAutoGistSync();
 };
 
+export const syncNowWithAutoGistImmediately = () => {
+  if (!isBrowser() || suppressCount > 0) return Promise.resolve();
+  pending = true;
+  writeAutoSyncStatus({ dirty: true, lastError: '' });
+  if (debounceTimer !== null) {
+    window.clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+  return runAutoSync();
+};
+
 export const checkAutoGistSyncNow = () => {
   return runAutoSync();
 };
 
 export const getAutoGistSyncStatus = (): AutoGistSyncStatus => {
-  const settings = readStoredSettings();
+  const status = readStoredStatus();
   return {
-    dirty: settings?.gistAutoSyncDirty === true,
-    lastAttemptAt: settings?.gistAutoSyncLastAttemptAt,
-    lastSuccessAt: settings?.gistAutoSyncLastSuccessAt,
-    lastError: settings?.gistAutoSyncLastError || undefined,
+    dirty: status.dirty === true,
+    lastAttemptAt: status.lastAttemptAt,
+    lastSuccessAt: status.lastSuccessAt,
+    lastError: status.lastError || undefined,
     syncing: Boolean(inFlight),
   };
 };

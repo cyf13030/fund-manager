@@ -270,6 +270,38 @@ describe('SettingsPage gist sync integration', () => {
     expect(window.alert).toHaveBeenCalledWith('请先选择或创建默认 Gist 备份。');
   });
 
+  it('立即同步按钮会直接触发上传', async () => {
+    localStorage.setItem(
+      'app-settings-preference',
+      JSON.stringify({
+        autoGistSync: true,
+        githubToken: 'ghp_abcdefghijklmnopqrstuvwxyz123456',
+        defaultGistTarget: {
+          id: 'g1',
+          description: '默认备份',
+          updatedAt: '2026-03-19T00:00:00Z',
+          fileName: 'fund-manager-sync.json',
+        },
+      }),
+    );
+    mockedDeps.settings.defaultGistTarget = {
+      id: 'g1',
+      description: '默认备份',
+      updatedAt: '2026-03-19T00:00:00Z',
+      fileName: 'fund-manager-sync.json',
+    };
+
+    render(<SettingsPage />);
+    await waitFor(() => expect(mockedDeps.listSyncGists).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'common.gistSync' }));
+    await screen.findByRole('button', { name: '立即同步' });
+
+    fireEvent.click(screen.getByRole('button', { name: '立即同步' }));
+
+    await waitFor(() => expect(mockedDeps.exportFundsToJsonString).toHaveBeenCalled());
+  });
+
   it('为主视图与二级视图保留 fixed 头部顶部安全间距', async () => {
     const { container } = render(<SettingsPage />);
 
