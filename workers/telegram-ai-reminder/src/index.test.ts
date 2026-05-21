@@ -301,7 +301,16 @@ describe('telegram ai reminder worker', () => {
       ok: boolean;
       summaryLine: string;
       cards: Array<{ title: string; value: string }>;
-      sections: Array<{ title: string; items: unknown[] }>;
+      sections: Array<{
+        title: string;
+        items: Array<{
+          title: string;
+          time: string;
+          url?: string;
+          relatedToPortfolio?: boolean;
+          relationReason?: string;
+        }>;
+      }>;
       sourceStatus: Array<{ label: string; value: string }>;
     };
 
@@ -312,6 +321,16 @@ describe('telegram ai reminder worker', () => {
     expect(body.cards[0].title).toBe('市场温度');
     expect(body.cards.some((card) => card.title === '资金流')).toBe(true);
     expect(body.sections.some((section) => section.title === '盘后消息')).toBe(true);
+    expect(body.sections.find((section) => section.title === 'A 股指数')?.items[0].time).toBe('15:00');
+    expect(body.sections.find((section) => section.title === '资金流')?.items[0].title).toBe(
+      '人工智能 +32.00 亿',
+    );
+    const portfolioNews = body.sections
+      .find((section) => section.title === '盘后消息')
+      ?.items.find((item) => item.title.includes('新能源'));
+    expect(portfolioNews?.url).toBe('https://finance.sina.com.cn/test.html');
+    expect(portfolioNews?.relatedToPortfolio).toBe(true);
+    expect(portfolioNews?.relationReason).toContain('新能源');
     expect(body.sourceStatus.some((item) => item.label === '盘后消息')).toBe(true);
   });
 

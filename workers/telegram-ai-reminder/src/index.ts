@@ -2320,9 +2320,21 @@ const formatPublicChangePct = (value: number) => `${value >= 0 ? '+' : ''}${roun
 
 const formatPublicTime = (value: string | undefined) => {
   if (!value) return '刚刚';
+  const compactMatch = value.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/);
+  if (compactMatch) {
+    return `${compactMatch[4]}:${compactMatch[5]}`;
+  }
   const parsed = Date.parse(value.replace(/-/g, '/'));
   if (!Number.isFinite(parsed)) return value;
   return new Date(parsed).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+};
+
+const formatPublicMoney = (value: number) => {
+  const absValue = Math.abs(value);
+  const sign = value >= 0 ? '+' : '-';
+  if (absValue >= 100000000) return `${sign}${round(absValue / 100000000).toFixed(2)} 亿`;
+  if (absValue >= 10000) return `${sign}${round(absValue / 10000).toFixed(2)} 万`;
+  return `${sign}${round(absValue).toFixed(2)} 元`;
 };
 
 const buildPortfolioNewsKeywords = (snapshot: HoldingsSnapshot) => {
@@ -2478,7 +2490,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       description: '主题热度和连续性，用来判断资金是否延续。',
       items: fundFlowItems.slice(0, 6).map((item) => ({
         tag: item.category === 'sector' ? '行业' : '概念',
-        title: `${item.name} ${formatMoney(item.netInflow)}`,
+        title: `${item.name} ${formatPublicMoney(item.netInflow)}`,
         impact: item.netInflow >= 0 ? '偏正面' : '偏负面',
         relation: item.code ? `代码 ${item.code}` : '无代码信息，按方向观察。',
         time: formatPublicTime(fundFlowSnapshot?.asOf),
