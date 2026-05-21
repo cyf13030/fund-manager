@@ -176,6 +176,24 @@ const eastMoneyFundFlowPayload = {
     ],
   },
 };
+const eastMoneyMarketBreadthPayload = {
+  data: {
+    total: 4,
+    diff: [
+      { f12: '000001', f14: '平安银行', f37: 1.2, f38: 1000000000 },
+      { f12: '000002', f14: '万科A', f37: -0.8, f38: 800000000 },
+      { f12: '000003', f14: '样本上涨', f37: 10.1, f38: 300000000 },
+      { f12: '000004', f14: '样本下跌', f37: -10.2, f38: 200000000 },
+    ],
+  },
+};
+const eastMoneyNorthboundPayload = {
+  data: {
+    hk2sh: { dayNetAmtIn: 1200000000, date2: '2026-05-18' },
+    hk2sz: { dayNetAmtIn: 800000000, date2: '2026-05-18' },
+    sz2hk: { dayNetAmtIn: 300000000, date2: '2026-05-18' },
+  },
+};
 const unavailableEastMoneyFundFlowPayload = {
   data: {
     diff: [
@@ -251,7 +269,13 @@ const mockBaseSuccessfulFetches = (
     if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
     if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
     if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNews));
+    if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) {
+      return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
+    }
     if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+      if (url.includes('f37') || url.includes('f38')) {
+        return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
+      }
       return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
     }
     if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNews));
@@ -355,7 +379,10 @@ describe('telegram ai reminder worker', () => {
     expect(body.summaryLine).toContain('上证指数');
     expect(body.cards[0].title).toBe('市场温度');
     expect(body.cards.some((card) => card.title === '资金流')).toBe(true);
-    expect(body.cards.some((card) => card.title === '市场宽度' && card.value === '中性')).toBe(true);
+    expect(body.cards.some((card) => card.title === '市场宽度' && card.value.includes('涨'))).toBe(true);
+    expect(body.cards.some((card) => card.title === '行业轮动')).toBe(true);
+    expect(body.cards.some((card) => card.title === '成交量')).toBe(true);
+    expect(body.cards.some((card) => card.title === '资金面')).toBe(true);
     expect(body.cards.some((card) => card.title === '持仓匹配' && card.value === '低')).toBe(true);
     expect(body.sections.some((section) => section.title === '盘后消息')).toBe(true);
     expect(body.sections.find((section) => section.title === 'A 股指数')?.items[0].time).toBe('15:00');
@@ -377,6 +404,8 @@ describe('telegram ai reminder worker', () => {
     expect(synonymNews?.relatedToPortfolio).toBe(true);
     expect(synonymNews?.relationReason).toContain('来源：新能源');
     expect(body.sourceStatus.some((item) => item.label === '盘后消息')).toBe(true);
+    expect(body.sourceStatus.some((item) => item.label === '北向资金')).toBe(true);
+    expect(body.sourceStatus.some((item) => item.label === '市场宽度')).toBe(true);
   });
 
   it('资金流空数据时会沿用最近可用主力方向', async () => {
@@ -403,7 +432,13 @@ describe('telegram ai reminder worker', () => {
       if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
       if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) {
+        return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
+      }
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+        if (url.includes('f37') || url.includes('f38')) {
+          return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
+        }
         return Promise.resolve(jsonResponse(emptyEastMoneyFundFlowPayload));
       }
       if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
