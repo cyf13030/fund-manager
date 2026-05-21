@@ -2352,6 +2352,89 @@ const buildPortfolioRiskRadar = (holdings: HoldingSnapshotItem[], totalAssets: n
   ];
 };
 
+const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: string) => {
+  const { holdings, marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot } = context;
+  const marketPhase = getChinaMarketPhase();
+  const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
+  const topExposures = holdings.underlyingExposures.slice(0, 8);
+  const topHoldings = [...holdings.holdings]
+    .sort((a, b) => b.marketValue - a.marketValue)
+    .slice(0, 8)
+    .map((item) => ({
+      name: item.name,
+      marketValue: round(item.marketValue),
+      dayChangePct: item.dayChangePct,
+      totalGainPct: item.totalGainPct,
+      quantSignal: item.quantSignal?.signal,
+      underlyingMarket: item.quantSignal?.underlyingMarket,
+      fundCategory: item.quantSignal?.fundCategory,
+    }));
+
+  const predictionContext = {
+    marketPhase,
+    portfolio: {
+      totalAssets: holdings.totalAssets,
+      totalDayGainPct: holdings.totalDayGainPct,
+      holdingGainPct: holdings.holdingGainPct,
+      availableAssets: holdings.availableAssets ?? null,
+      dailyEarningsTrend: holdings.dailyEarningsSummary?.trendText ?? null,
+      quantSummary,
+      highRiskItems: holdings.riskRadar.filter((item) => item.level === 'high').map((item) => item.label),
+      mediumRiskItems: holdings.riskRadar.filter((item) => item.level === 'medium').map((item) => item.label),
+      dataCoverage: holdings.dataCoverage,
+    },
+    aShareMarket: {
+      dataStatus: marketSnapshot?.dataStatus ?? 'missing',
+      indices: marketSnapshot?.indices.slice(0, 10) ?? [],
+    },
+    overseasMarket: {
+      dataStatus: overseasMarketSnapshot?.dataStatus ?? 'missing',
+      items: overseasMarketSnapshot?.items.slice(0, 10) ?? [],
+    },
+    afterHoursNews: {
+      dataStatus: newsSnapshot?.dataStatus ?? 'missing',
+      session: newsSnapshot?.session ?? 'missing',
+      lookbackHours: newsSnapshot?.lookbackHours ?? null,
+      items:
+        newsSnapshot?.items.slice(0, 10).map((item) => ({
+          title: item.title,
+          source: item.source,
+          publishedAt: item.publishedAt,
+        })) ?? [],
+    },
+    fundFlow: {
+      dataStatus: fundFlowSnapshot?.dataStatus ?? 'missing',
+      unavailableReason: fundFlowSnapshot?.unavailableReason,
+      topItems: fundFlowSnapshot?.items.slice(0, 8) ?? [],
+      trendItems: fundFlowSnapshot?.trendItems?.slice(0, 8) ?? [],
+    },
+    portfolioExposure: {
+      topExposures,
+      topHoldings,
+      equityOverlapCount: holdings.equityOverlap.length,
+    },
+  };
+
+  const roleInstruction =
+    mode === 'risk'
+      ? '你是一位谨慎的组合风险预测助手，必须优先识别明日下行扰动和低置信信号。'
+      : '你是一位基金组合明日涨跌预测助手，必须做条件化概率判断，不做确定性承诺。';
+
+  return `${roleInstruction}
+要求：
+1) 只基于“预测专用摘要”推理，不得编造摘要之外的指数、期货、新闻、资金流、北向资金或公告。
+2) 外围市场/指数期货只能作为情绪和开盘扰动参考，不能写成 A 股必然涨跌。
+3) 盘后消息面只可引用摘要中已有标题；新闻缺失或接口失败时必须说明，不得假设政策利好或利空。
+4) 资金流连续性只能基于 trendItems；trendItems 为空时必须说明连续性样本不足。
+5) 组合方向必须结合持仓底层暴露、近几日收益趋势、量化摘要和 A 股/外围市场共同判断。
+6) 必须输出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”。
+7) 不得写“必涨”“必跌”“一定”。不确定就降低置信度。
+8) 最终回复不得出现 dataStatus、trendItems、marketSnapshot、overseasMarketSnapshot、fundFlowSnapshot、holdings 等字段名，必须转成自然语言。
+
+预测专用摘要：
+${JSON.stringify(predictionContext)}`;
+};
+
 const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: string) => {
   const { holdings, marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot } = context;
   const sortedByGain = [...holdings.holdings].sort((a, b) => b.totalGainPct - a.totalGainPct);
@@ -2517,7 +2600,10 @@ const analyzeHoldings = async (
 
   const mode = env.AI_MODE || 'deep';
   const question = questionOverride || env.AI_QUESTION || DEFAULT_AI_QUESTION;
-  const systemPrompt = buildHoldingsAnalysisPrompt(context, mode);
+  const systemPrompt =
+    question === TOMORROW_PREDICTION_QUESTION
+      ? buildTomorrowPredictionPrompt(context, mode)
+      : buildHoldingsAnalysisPrompt(context, mode);
   const endpoint = resolveAiEndpoint(env);
 
   if (endpoint.provider === 'gemini') {

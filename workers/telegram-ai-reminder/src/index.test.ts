@@ -906,6 +906,11 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('外围市场/指数期货');
     expect(aiBody.messages[1].content).toContain('盘后消息面');
     expect(aiBody.messages[1].content).toContain('资金流连续性');
+    expect(aiBody.messages[0].content).toContain('预测专用摘要');
+    expect(aiBody.messages[0].content).toContain('overseasMarket');
+    expect(aiBody.messages[0].content).toContain('afterHoursNews');
+    expect(aiBody.messages[0].content).toContain('fundFlow');
+    expect(aiBody.messages[0].content).not.toContain('buildCandidates');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
 
