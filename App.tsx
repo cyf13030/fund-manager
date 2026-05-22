@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
 import { Dashboard } from './components/Dashboard';
 import { Watchlist } from './components/Watchlist';
+import { NewsPage } from './components/NewsPage';
 import { Ticker } from './components/Ticker';
 import { GlowGrid } from './components/GlowGrid';
 import { AnimatedSwitcher } from './components/transitions/AnimatedSwitcher';
@@ -23,7 +24,6 @@ const SettingsPage = lazy(() =>
 const ServicesPanel = lazy(() =>
   import('./components/ServicesPanel').then((m) => ({ default: m.ServicesPanel })),
 );
-const NewsPage = lazy(() => import('./components/NewsPage').then((m) => ({ default: m.NewsPage })));
 const ScannerModal = lazy(() =>
   import('./components/ScannerModal').then((m) => ({ default: m.ScannerModal })),
 );
@@ -61,22 +61,18 @@ const AppContent: React.FC = () => {
         return <Watchlist />;
       case 'settings':
         return (
-          <Suspense fallback={null}>
+          <Suspense fallback={<div className="px-4 py-6 text-sm text-slate-500">正在加载设置...</div>}>
             <SettingsPage initialShowAiSettings={openAiSettingsRequested} />
           </Suspense>
         );
       case 'services':
         return (
-          <Suspense fallback={null}>
+          <Suspense fallback={<div className="px-4 py-6 text-sm text-slate-500">正在加载服务...</div>}>
             <ServicesPanel />
           </Suspense>
         );
       case 'news':
-        return (
-          <Suspense fallback={null}>
-            <NewsPage />
-          </Suspense>
-        );
+        return <NewsPage />;
       default:
         return (
           <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-400 gap-4">
