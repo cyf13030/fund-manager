@@ -238,6 +238,21 @@ interface FundQuantSignalSnapshot {
   reason: string;
 }
 
+interface FundProfileSnapshot {
+  status: 'available' | 'missing' | 'failed';
+  source: 'eastmoney-page';
+  fundType?: string;
+  riskLevel?: string;
+  scaleText?: string;
+  scaleDate?: string;
+  managerText?: string;
+  inceptionDate?: string;
+  managementCompany?: string;
+  sourceRate?: string;
+  currentRate?: string;
+  note: string;
+}
+
 interface QuantThresholdProfile {
   strong: number;
   weak: number;
@@ -341,6 +356,7 @@ interface HoldingSnapshotItem {
   holdingsDataStatus?: 'available' | 'missing' | 'failed';
   holdingsDataDate?: string;
   quantSignal?: FundQuantSignalSnapshot;
+  fundProfile?: FundProfileSnapshot;
 }
 
 interface HoldingsSnapshot {
@@ -809,6 +825,7 @@ const EASTMONEY_NEWS_API = 'https://np-listapi.eastmoney.com/comm/web/getNewsByC
 const EASTMONEY_FUND_FLOW_API = 'https://push2.eastmoney.com/api/qt/clist/get';
 const EASTMONEY_MARKET_BREADTH_API = 'https://push2.eastmoney.com/api/qt/clist/get';
 const EASTMONEY_NORTHBOUND_API = 'https://push2.eastmoney.com/api/qt/kamt/get';
+const EASTMONEY_FUND_PAGE_BASE = 'https://fund.eastmoney.com';
 const SINA_FINANCE_ROLL_API = 'https://feed.mix.sina.com.cn/api/roll/get';
 const YAHOO_FINANCE_CHART_API = 'https://query1.finance.yahoo.com/v8/finance/chart';
 const QQ_OFFICIAL_API_BASE = 'https://api.sgroup.qq.com';
@@ -817,6 +834,7 @@ const DEFAULT_NEWS_QUERY_TIMEOUT_MS = 5000;
 const DEFAULT_FUND_FLOW_QUERY_TIMEOUT_MS = 3000;
 const DEFAULT_OVERSEAS_MARKET_QUERY_TIMEOUT_MS = 3500;
 const DEFAULT_FUND_HOLDINGS_TIMEOUT_MS = 5000;
+const DEFAULT_FUND_PROFILE_TIMEOUT_MS = 3500;
 const FAST_ANALYSIS_FUND_HOLDINGS_TIMEOUT_MS = 3000;
 const FUND_HOLDINGS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_FUND_FLOW_HISTORY_ENTRIES = 30;
@@ -1647,6 +1665,84 @@ const fetchFundHoldingsEnrichment = async (
   };
   fundHoldingsCache.set(fundCode, { expiresAt: Date.now() + FUND_HOLDINGS_CACHE_TTL_MS, enrichment });
   return enrichment;
+};
+
+const decodeHtmlEntities = (value: string) =>
+  value
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#40;|&lpar;/gi, '(')
+    .replace(/&#41;|&rpar;/gi, ')');
+
+const normalizeFundPageText = (html: string) =>
+  decodeHtmlEntities(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const extractFirstMatch = (text: string, pattern: RegExp) => text.match(pattern)?.[1]?.trim();
+
+const parseEastMoneyFundProfile = (fundCode: string, html: string): FundProfileSnapshot => {
+  const text = normalizeFundPageText(html);
+  const typeAndRisk = text.match(/类型：\s*([^|\s]+(?:-[^|\s]+)?)\s*\|\s*([^\s]+风险)/);
+  const scaleMatch = text.match(/规模：\s*([^（\s]+)\s*（([^）]+)）/);
+  const feeMatch = text.match(/购买手续费：\s*([\d.]+%)\s*([\d.]+%)/);
+  const profile: FundProfileSnapshot = {
+    status: 'available',
+    source: 'eastmoney-page',
+    fundType: typeAndRisk?.[1]?.trim(),
+    riskLevel: typeAndRisk?.[2]?.trim(),
+    scaleText: scaleMatch?.[1]?.trim(),
+    scaleDate: scaleMatch?.[2]?.trim(),
+    managerText: extractFirstMatch(text, /基金经理：\s*(.+?)\s*成\s*立\s*日：/),
+    inceptionDate: extractFirstMatch(text, /成\s*立\s*日：\s*(\d{4}-\d{2}-\d{2})/),
+    managementCompany: extractFirstMatch(text, /管\s*理\s*人：\s*(.+?)\s*基金评级：/),
+    sourceRate: feeMatch?.[1],
+    currentRate: feeMatch?.[2],
+    note: `公开页面解析：${EASTMONEY_FUND_PAGE_BASE}/${fundCode}.html`,
+  };
+
+  if (!profile.fundType && !profile.scaleText && !profile.managerText && !profile.managementCompany) {
+    return {
+      status: 'missing',
+      source: 'eastmoney-page',
+      note: '东方财富基金页未解析到可用画像字段。',
+    };
+  }
+
+  return profile;
+};
+
+const fetchFundProfile = async (
+  fundCode: string,
+  timeoutMs = DEFAULT_FUND_PROFILE_TIMEOUT_MS,
+): Promise<FundProfileSnapshot> => {
+  try {
+    const html = await fetchTextWithTimeout(
+      `${EASTMONEY_FUND_PAGE_BASE}/${fundCode}.html`,
+      {
+        headers: {
+          Accept: 'text/html,application/xhtml+xml',
+          'User-Agent': 'fund-manager-telegram-ai-reminder',
+        },
+      },
+      `读取基金 ${fundCode} 画像`,
+      timeoutMs,
+      'utf-8',
+    );
+    return parseEastMoneyFundProfile(fundCode, html);
+  } catch (error) {
+    console.warn(`读取基金 ${fundCode} 画像失败`, error);
+    return {
+      status: 'failed',
+      source: 'eastmoney-page',
+      note: '东方财富基金页请求失败，画像字段暂不可用。',
+    };
+  }
 };
 
 const getChinaDateString = (date = new Date()) => {
@@ -3241,12 +3337,16 @@ const buildHoldingsSnapshot = async (
   const enrichments = await Promise.all(
     validFunds.map(async (fund) => [fund.code, await fetchFundHoldingsEnrichment(fund.code, holdingsTimeoutMs)] as const),
   );
+  const profiles = await Promise.all(
+    validFunds.map(async (fund) => [fund.code, await fetchFundProfile(fund.code)] as const),
+  );
   const quantSignals = await Promise.all(
     validFunds.map(async (fund) => {
       return [fund.code, await getFundQuantSignal(fund.code, { cachedOnly: quantCachedOnly, fundName: fund.name })] as const;
     }),
   );
   const enrichmentMap = new Map(enrichments);
+  const profileMap = new Map(profiles);
   const quantSignalMap = new Map(quantSignals);
   const holdings = validFunds.map<HoldingSnapshotItem>((fund) => {
       const marketValue = fund.holdingShares * fund.currentNav;
@@ -3276,6 +3376,7 @@ const buildHoldingsSnapshot = async (
         holdingsDataStatus: enrichment?.status ?? 'missing',
         holdingsDataDate: enrichment?.portfolioDate,
         quantSignal: quantSignalMap.get(fund.code),
+        fundProfile: profileMap.get(fund.code),
       };
     });
 
@@ -4473,6 +4574,20 @@ const buildPortfolioRiskRadar = (holdings: HoldingSnapshotItem[], totalAssets: n
   ];
 };
 
+const buildFundProfileBrief = (profile?: FundProfileSnapshot) => {
+  if (!profile || profile.status !== 'available') return null;
+  return {
+    fundType: profile.fundType,
+    riskLevel: profile.riskLevel,
+    scaleText: profile.scaleText,
+    scaleDate: profile.scaleDate,
+    managerText: profile.managerText,
+    inceptionDate: profile.inceptionDate,
+    managementCompany: profile.managementCompany,
+    currentRate: profile.currentRate,
+  };
+};
+
 const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: string) => {
   const {
     holdings,
@@ -4501,6 +4616,7 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
       quantSignal: item.quantSignal?.signal,
       underlyingMarket: item.quantSignal?.underlyingMarket,
       fundCategory: item.quantSignal?.fundCategory,
+      fundProfile: buildFundProfileBrief(item.fundProfile),
     }));
 
   const predictionContext = {
@@ -4614,6 +4730,7 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
       quantSignal: item.quantSignal?.signal,
       underlyingMarket: item.quantSignal?.underlyingMarket,
       fundCategory: item.quantSignal?.fundCategory,
+      fundProfile: buildFundProfileBrief(item.fundProfile),
     }));
 
   const upDownContext = {
@@ -4744,6 +4861,10 @@ const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: strin
       valuationBacktest: holdings.valuationBacktestSummary ?? null,
       topExposures: holdings.underlyingExposures.slice(0, 8),
       marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
+      fundProfiles: holdings.holdings.slice(0, 8).map((item) => ({
+        name: item.name,
+        profile: buildFundProfileBrief(item.fundProfile),
+      })),
       dataCoverage: holdings.dataCoverage,
     },
     analysisDiagnostics,
@@ -4797,6 +4918,7 @@ const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: s
       quantSignal: fund.quantSignal?.signal,
       fundCategory: fund.quantSignal?.fundCategory,
       underlyingMarket: fund.quantSignal?.underlyingMarket,
+      fundProfile: buildFundProfileBrief(fund.fundProfile),
     }));
   const actionContext = {
     action,
@@ -4898,6 +5020,7 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
   const analysisDiagnostics = buildAnalysisDiagnostics(context);
   const fundFlowHistory = context.fundFlowHistorySummary;
   const predictionRecords = context.predictionRecordsSummary;
+  const availableFundProfiles = holdings.holdings.filter((item) => item.fundProfile?.status === 'available');
 
   const modeInstruction =
     mode === 'risk'
@@ -4932,6 +5055,16 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
     `前十大重仓股数据: ${holdings.dataCoverage.topEquityHoldings}`,
     `真实行业分布数据: ${holdings.dataCoverage.industryDistribution}`,
     `基金经理最新调仓数据: ${holdings.dataCoverage.managerChanges}`,
+    `基金画像数据: ${availableFundProfiles.length}/${holdings.holdings.length}`,
+    availableFundProfiles.length > 0
+      ? `基金画像摘要: ${availableFundProfiles
+          .slice(0, 5)
+          .map((item) => {
+            const profile = item.fundProfile;
+            return `${item.name}(${profile?.fundType || '类型缺失'}, ${profile?.riskLevel || '风险缺失'}, 规模${profile?.scaleText || '缺失'}, 经理${profile?.managerText || '缺失'})`;
+          })
+          .join('、')}`
+      : '基金画像摘要: missing',
     `账户外资产数据: ${holdings.dataCoverage.externalAssets}`,
     `风险承受能力: ${holdings.dataCoverage.riskProfile}`,
     `投资期限: ${holdings.dataCoverage.investmentHorizon}`,

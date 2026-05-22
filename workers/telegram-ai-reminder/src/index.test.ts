@@ -157,6 +157,8 @@ const eastMoneyHistoricalNavText = `var apidata={content:"<table>${Array.from({ 
   const nav = (1.4 - index * 0.002).toFixed(4);
   return `<tr><td>2026-${month}-${day}</td><td>${nav}</td><td>${nav}</td><td>0.10%</td></tr>`;
 }).join('')}</table>"};`;
+const eastMoneyFundPageText =
+  '类型：混合型-灵活 | 中高风险 规模：26.44亿元（2026-03-31）基金经理：郑晓辉等 成 立 日：2001-12-18 管 理 人：华夏基金 基金评级： 购买手续费：1.50% 0.15% 1.0折';
 
 const eastMoneyNewsPayload = {
   data: {
@@ -307,6 +309,7 @@ const mockBaseSuccessfulFetches = (
       );
     }
     if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+    if (url.includes('fund.eastmoney.com/000001.html')) return Promise.resolve(new Response(eastMoneyFundPageText));
     if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
     if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
     if (url.includes('query1.finance.yahoo.com')) return Promise.resolve(jsonResponse(yahooChartPayload));
@@ -615,6 +618,9 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('近3日每日收益: 2026-05-18 +1.80 元');
     expect(aiBody.messages[0].content).toContain('盘中估值误差回测: available');
     expect(aiBody.messages[0].content).toContain('平均绝对误差 0.33%');
+    expect(aiBody.messages[0].content).toContain('基金画像数据: 1/1');
+    expect(aiBody.messages[0].content).toContain('基金画像摘要: 测试基金A');
+    expect(aiBody.messages[0].content).toContain('混合型-灵活');
     expect(aiBody.messages[0].content).toContain('今日加仓候选');
     expect(aiBody.messages[0].content).toContain('不得编造新闻标题、财报数据、公告内容或资金流数据');
     expect(aiBody.messages[0].content).toContain('不要编造不存在的数据');
