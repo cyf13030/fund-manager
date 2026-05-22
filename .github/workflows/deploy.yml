@@ -62,6 +62,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           VITE_PRESENCE_WORKER_URL: https://gp.hrfuqiang.top/presence
+          VITE_LLM_PROXY_BASE_URL: https://fund-manager-llm-proxy.nizhan80.workers.dev/llm-proxy
 
       - name: Inject custom domain (optional)
         if: ${{ vars.PAGES_CNAME != '' }}

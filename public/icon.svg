@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="小胡养基">
+  <defs>
+    <linearGradient id="bg" x1="72" x2="440" y1="56" y2="456" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ecfeff"/>
+      <stop offset="0.52" stop-color="#dbeafe"/>
+      <stop offset="1" stop-color="#f0fdf4"/>
+    </linearGradient>
+    <linearGradient id="line" x1="136" x2="376" y1="342" y2="180" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10b981"/>
+      <stop offset="1" stop-color="#ef4444"/>
+    </linearGradient>
+    <filter id="shadow" x="80" y="80" width="352" height="352" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#0f172a" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g filter="url(#shadow)">
+    <rect x="104" y="104" width="304" height="304" rx="72" fill="#ffffff" fill-opacity="0.86"/>
+    <path d="M148 330c42-6 60-34 92-30 28 4 38 30 66 22 30-8 38-54 58-88" fill="none" stroke="url(#line)" stroke-linecap="round" stroke-linejoin="round" stroke-width="28"/>
+    <circle cx="148" cy="330" r="18" fill="#10b981"/>
+    <circle cx="240" cy="300" r="18" fill="#22c55e"/>
+    <circle cx="306" cy="322" r="18" fill="#f97316"/>
+    <circle cx="364" cy="234" r="18" fill="#ef4444"/>
+    <path d="M150 378h212" stroke="#94a3b8" stroke-linecap="round" stroke-width="18"/>
+    <path d="M160 158h72M160 206h112" stroke="#0f172a" stroke-linecap="round" stroke-width="20" opacity="0.82"/>
+  </g>
+</svg>

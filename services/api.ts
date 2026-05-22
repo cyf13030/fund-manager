@@ -1485,16 +1485,16 @@ export const fetchParentETFInfo = async (
         };
       }
 
+      if (!isEtfLinkFundName(fundName)) {
+        return null;
+      }
+
       const f10Html = await fetchEastMoneyF10(fundCode);
       if (f10Html) {
         const fromF10 = extractParentEtfFromF10(f10Html);
         if (fromF10) {
           return fromF10;
         }
-      }
-
-      if (!isEtfLinkFundName(fundName)) {
-        return null;
       }
 
       const inferredParentName = inferParentEtfName(fundName);
