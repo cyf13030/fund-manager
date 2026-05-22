@@ -378,6 +378,28 @@ interface MarketSnapshot {
   dataStatus: 'available' | 'partial' | 'missing';
 }
 
+interface YahooChartResponse {
+  chart?: {
+    result?: Array<{
+      meta?: {
+        symbol?: string;
+        shortName?: string;
+        longName?: string;
+        regularMarketPrice?: number;
+        chartPreviousClose?: number;
+        regularMarketTime?: number;
+      };
+      timestamp?: number[];
+      indicators?: {
+        quote?: Array<{
+          close?: Array<number | null>;
+        }>;
+      };
+    }>;
+    error?: unknown;
+  };
+}
+
 interface OverseasMarketSnapshot {
   asOf: string;
   items: Array<MarketIndexSnapshot & { market: 'US' | 'HK' | 'FX' | 'COMMODITY' | 'FUTURES' }>;
@@ -756,10 +778,12 @@ const EASTMONEY_FUND_FLOW_API = 'https://push2.eastmoney.com/api/qt/clist/get';
 const EASTMONEY_MARKET_BREADTH_API = 'https://push2.eastmoney.com/api/qt/clist/get';
 const EASTMONEY_NORTHBOUND_API = 'https://push2.eastmoney.com/api/qt/kamt/get';
 const SINA_FINANCE_ROLL_API = 'https://feed.mix.sina.com.cn/api/roll/get';
+const YAHOO_FINANCE_CHART_API = 'https://query1.finance.yahoo.com/v8/finance/chart';
 const QQ_OFFICIAL_API_BASE = 'https://api.sgroup.qq.com';
 const QQ_OFFICIAL_ACCESS_TOKEN_API = 'https://bots.qq.com/app/getAppAccessToken';
 const DEFAULT_NEWS_QUERY_TIMEOUT_MS = 5000;
 const DEFAULT_FUND_FLOW_QUERY_TIMEOUT_MS = 3000;
+const DEFAULT_OVERSEAS_MARKET_QUERY_TIMEOUT_MS = 3500;
 const DEFAULT_FUND_HOLDINGS_TIMEOUT_MS = 5000;
 const FAST_ANALYSIS_FUND_HOLDINGS_TIMEOUT_MS = 3000;
 const FUND_HOLDINGS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -881,6 +905,20 @@ const DEFAULT_MARKET_INDEX_CODES = [
   'sh000688',
 ];
 const DEFAULT_OVERSEAS_MARKET_CODES = ['usDJI', 'usINX', 'usIXIC', 'hkHSI', 'hkHSTECH', 'hf_CHA50CFD', 'USDCNH'];
+const YAHOO_OVERSEAS_MARKET_SYMBOLS: Array<{
+  symbol: string;
+  name: string;
+  market: OverseasMarketSnapshot['items'][number]['market'];
+}> = [
+  { symbol: '^GSPC', name: '标普500', market: 'US' },
+  { symbol: '^IXIC', name: '纳斯达克指数', market: 'US' },
+  { symbol: '^HSI', name: '恒生指数', market: 'HK' },
+  { symbol: 'GC=F', name: 'COMEX黄金', market: 'COMMODITY' },
+  { symbol: 'CL=F', name: 'WTI原油', market: 'COMMODITY' },
+  { symbol: 'DX-Y.NYB', name: '美元指数', market: 'FX' },
+  { symbol: '^TNX', name: '美国10年期国债收益率', market: 'FUTURES' },
+  { symbol: 'KWEB', name: '中概互联网ETF', market: 'US' },
+];
 const MARKET_INDEX_NAMES: Record<string, string> = {
   sh000001: '上证指数',
   sz399001: '深证成指',
@@ -4132,9 +4170,58 @@ const resolveOverseasMarket = (code: string): OverseasMarketSnapshot['items'][nu
   return 'COMMODITY';
 };
 
+const parseYahooChartItem = (
+  response: YahooChartResponse,
+  fallback: (typeof YAHOO_OVERSEAS_MARKET_SYMBOLS)[number],
+): (MarketIndexSnapshot & { market: OverseasMarketSnapshot['items'][number]['market'] }) | null => {
+  const result = response.chart?.result?.[0];
+  const meta = result?.meta;
+  if (!result || !meta) return null;
+
+  const closes = result.indicators?.quote?.[0]?.close?.filter((value): value is number => Number.isFinite(value)) ?? [];
+  const price = Number.isFinite(meta.regularMarketPrice) ? meta.regularMarketPrice : closes.at(-1);
+  const previousClose = Number.isFinite(meta.chartPreviousClose) ? meta.chartPreviousClose : closes.at(-2);
+  if (!Number.isFinite(price) || !Number.isFinite(previousClose) || previousClose === 0) return null;
+
+  const change = price - previousClose;
+  const updateTime = meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : undefined;
+  return {
+    code: meta.symbol || fallback.symbol,
+    name: fallback.name || meta.shortName || meta.longName || fallback.symbol,
+    price: round(price, 4),
+    changePct: round((change / previousClose) * 100),
+    change: round(change, 4),
+    updateTime,
+    market: fallback.market,
+  };
+};
+
+const fetchYahooOverseasMarketItems = async () => {
+  const results = await mapWithConcurrency(YAHOO_OVERSEAS_MARKET_SYMBOLS, 4, async (item) => {
+    try {
+      const response = await fetchJsonWithTimeout<YahooChartResponse>(
+        `${YAHOO_FINANCE_CHART_API}/${encodeURIComponent(item.symbol)}?range=5d&interval=1d`,
+        { headers: { Accept: 'application/json' } },
+        `读取 Yahoo Finance ${item.name}`,
+        DEFAULT_OVERSEAS_MARKET_QUERY_TIMEOUT_MS,
+      );
+      return parseYahooChartItem(response, item);
+    } catch (error) {
+      console.warn(`读取 Yahoo Finance ${item.name} 失败`, error);
+      return null;
+    }
+  });
+  return results.filter(
+    (item): item is MarketIndexSnapshot & { market: OverseasMarketSnapshot['items'][number]['market'] } => Boolean(item),
+  );
+};
+
 const fetchOverseasMarketSnapshot = async (env: Env): Promise<OverseasMarketSnapshot | undefined> => {
   if (!isEnabled(env.MARKET_ANALYSIS_ENABLED, true)) return undefined;
   const codes = DEFAULT_OVERSEAS_MARKET_CODES;
+  const failedSources: string[] = [];
+  let tencentItems: Array<MarketIndexSnapshot & { market: OverseasMarketSnapshot['items'][number]['market'] }> = [];
+  let yahooItems: Array<MarketIndexSnapshot & { market: OverseasMarketSnapshot['items'][number]['market'] }> = [];
 
   try {
     const text = await fetchText(
@@ -4143,26 +4230,31 @@ const fetchOverseasMarketSnapshot = async (env: Env): Promise<OverseasMarketSnap
       '读取外围市场与指数期货',
       'gb18030',
     );
-    const items = text
+    tencentItems = text
       .split(';')
       .map(parseTencentMarketLine)
       .filter((item): item is MarketIndexSnapshot => Boolean(item))
       .map((item) => ({ ...item, market: resolveOverseasMarket(item.code) }));
-    return {
-      asOf: new Date().toISOString(),
-      items,
-      dataStatus: items.length === 0 ? 'missing' : items.length === codes.length ? 'available' : 'partial',
-      failedSources: items.length === codes.length ? undefined : ['tencent-overseas-market'],
-    };
+    if (tencentItems.length !== codes.length) failedSources.push('tencent-overseas-market');
   } catch (error) {
     console.warn('读取外围市场与指数期货失败', error);
-    return {
-      asOf: new Date().toISOString(),
-      items: [],
-      dataStatus: 'missing',
-      failedSources: ['tencent-overseas-market'],
-    };
+    failedSources.push('tencent-overseas-market');
   }
+
+  yahooItems = await fetchYahooOverseasMarketItems();
+  if (yahooItems.length !== YAHOO_OVERSEAS_MARKET_SYMBOLS.length) failedSources.push('yahoo-finance-overseas-market');
+
+  const tencentNames = new Set(tencentItems.map((item) => item.name));
+  const uniqueYahooItems = yahooItems.filter((item) => !tencentNames.has(item.name));
+  const items = [...tencentItems, ...uniqueYahooItems];
+  const expectedCount = codes.length + YAHOO_OVERSEAS_MARKET_SYMBOLS.length - (yahooItems.length - uniqueYahooItems.length);
+
+  return {
+    asOf: new Date().toISOString(),
+    items,
+    dataStatus: items.length === 0 ? 'missing' : items.length >= expectedCount ? 'available' : 'partial',
+    failedSources: failedSources.length > 0 ? failedSources : undefined,
+  };
 };
 
 const buildPortfolioQuantSummary = (holdings: HoldingSnapshotItem[], totalAssets: number) => {
@@ -4383,6 +4475,7 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
   const {
     holdings,
     marketSnapshot,
+    overseasMarketSnapshot,
     newsSnapshot,
     fundFlowSnapshot,
     marketBreadthSnapshot,
@@ -4429,6 +4522,10 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
     aShareMarket: {
       dataStatus: marketSnapshot?.dataStatus ?? 'missing',
       indices: marketSnapshot?.indices.slice(0, 10) ?? [],
+    },
+    overseasMarket: {
+      dataStatus: overseasMarketSnapshot?.dataStatus ?? 'missing',
+      items: overseasMarketSnapshot?.items.slice(0, 8) ?? [],
     },
     news: {
       dataStatus: newsSnapshot?.dataStatus ?? 'missing',

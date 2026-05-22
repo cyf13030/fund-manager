@@ -114,6 +114,24 @@ const holdingsPayload = {
 const marketText =
   'v_sh000001="1~上证指数~000001~3050.12~~~~~~~~~~~~~~~~~~~~~~~~~~~20260518150000~12.34~0.41";\n' +
   'v_sz399006="51~创业板指~399006~2200.50~~~~~~~~~~~~~~~~~~~~~~~~~~~20260518150000~-8.80~-0.40";';
+const yahooChartPayload = {
+  chart: {
+    result: [
+      {
+        meta: {
+          symbol: '^GSPC',
+          shortName: 'S&P 500',
+          regularMarketPrice: 5100,
+          chartPreviousClose: 5000,
+          regularMarketTime: 1779397704,
+        },
+        timestamp: [1779283800, 1779370200],
+        indicators: { quote: [{ close: [5000, 5100] }] },
+      },
+    ],
+    error: null,
+  },
+};
 const stockQuoteText =
   'v_s_sh600519="1~贵州茅台~600519~100.00~0.00~3.00";\n' +
   'v_s_sz300750="1~宁德时代~300750~100.00~0.00~1.00";';
@@ -285,6 +303,7 @@ const mockBaseSuccessfulFetches = (
     if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
     if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
     if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+    if (url.includes('query1.finance.yahoo.com')) return Promise.resolve(jsonResponse(yahooChartPayload));
     if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNews));
     if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) {
       return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
@@ -443,6 +462,7 @@ describe('telegram ai reminder worker', () => {
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayloadWithoutSector));
       if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('query1.finance.yahoo.com')) return Promise.resolve(jsonResponse(yahooChartPayload));
       if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
       if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) {
         return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
@@ -492,6 +512,7 @@ describe('telegram ai reminder worker', () => {
       if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
       if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
       if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('query1.finance.yahoo.com')) return Promise.resolve(jsonResponse(yahooChartPayload));
       if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
       if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) {
         return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
@@ -1155,6 +1176,7 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('资金流连续性');
     expect(aiBody.messages[0].content).toContain('预测专用摘要');
     expect(aiBody.messages[0].content).toContain('overseasMarket');
+    expect(aiBody.messages[0].content).toContain('COMEX黄金');
     expect(aiBody.messages[0].content).toContain('afterHoursNews');
     expect(aiBody.messages[0].content).toContain('fundFlow');
     expect(aiBody.messages[0].content).toContain('marketStructure');
@@ -1178,6 +1200,7 @@ describe('telegram ai reminder worker', () => {
     };
     expect(statePayload.fundFlowHistory).toHaveLength(1);
     expect(statePayload.predictionRecords).toHaveLength(1);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('query1.finance.yahoo.com'))).toBe(true);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
 
