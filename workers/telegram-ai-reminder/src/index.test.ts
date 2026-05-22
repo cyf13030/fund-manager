@@ -1160,10 +1160,24 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('marketStructure');
     expect(aiBody.messages[0].content).toContain('marketFit');
     expect(aiBody.messages[0].content).toContain('analysisDiagnostics');
+    expect(aiBody.messages[0].content).toContain('fundFlowHistory');
+    expect(aiBody.messages[0].content).toContain('predictionRecords');
     expect(aiBody.messages[0].content).toContain('持仓匹配度必须区分');
     expect(aiBody.messages[0].content).toContain('transactionSettlement');
     expect(aiBody.messages[0].content).toContain('待确认买入不能算当前已确认持仓收益');
     expect(aiBody.messages[0].content).not.toContain('buildCandidates');
+    const statePatchCall = fetchMock.mock.calls.find(
+      (call) => String(call[0]).includes('api.github.com/gists') && call[1]?.method === 'PATCH',
+    );
+    const statePatchBody = JSON.parse(statePatchCall?.[1].body as string) as {
+      files: Record<string, { content: string }>;
+    };
+    const statePayload = JSON.parse(statePatchBody.files['fund-manager-ai-state.json'].content) as {
+      fundFlowHistory: unknown[];
+      predictionRecords: unknown[];
+    };
+    expect(statePayload.fundFlowHistory).toHaveLength(1);
+    expect(statePayload.predictionRecords).toHaveLength(1);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
 

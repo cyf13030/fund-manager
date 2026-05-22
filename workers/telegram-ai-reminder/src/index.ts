@@ -61,6 +61,9 @@ interface FundBackupPayload {
   fundDailyEarnings?: FundDailyEarningsScopedMap;
 }
 
+type AnalysisStateSchemaVersion = 1;
+type ChinaMarketPhase = 'preMarket' | 'morningSession' | 'middayBreak' | 'afternoonSession' | 'postClose';
+
 interface InvestmentProfileSnapshot {
   riskTolerance?: string;
   investmentHorizon?: string;
@@ -491,6 +494,56 @@ interface FundFlowSnapshot {
   }>;
 }
 
+interface FundFlowHistoryEntry {
+  date: string;
+  asOf: string;
+  items: FundFlowItemSnapshot[];
+  dataStatus: FundFlowSnapshot['dataStatus'];
+}
+
+interface FundFlowHistorySummary {
+  asOf: string | null;
+  entries: number;
+  persistent: boolean;
+  topThemes: Array<{
+    name: string;
+    category: 'sector' | 'concept';
+    appearances: number;
+    latestRank: number;
+    latestNetInflow: number;
+    rankChange?: number;
+    status: 'continuous' | 'new' | 'cooling';
+  }>;
+  note: string;
+}
+
+interface PredictionRecord {
+  id: string;
+  createdAt: string;
+  date: string;
+  marketPhase: ChinaMarketPhase;
+  conclusion: '偏涨' | '偏跌' | '震荡' | '不确定' | '未识别';
+  confidence: '高' | '中' | '低' | '未识别';
+  dataQualityScore: number;
+  portfolioDayGainPct: number;
+  topFlowThemes: string[];
+  analysisPreview: string;
+}
+
+interface PredictionRecordsSummary {
+  records: number;
+  latest?: Pick<PredictionRecord, 'date' | 'conclusion' | 'confidence' | 'dataQualityScore'>;
+  recentDistribution: Record<'偏涨' | '偏跌' | '震荡' | '不确定' | '未识别', number>;
+  note: string;
+}
+
+interface AnalysisStatePayload {
+  version: AnalysisStateSchemaVersion;
+  updatedAt: string;
+  fundFlowHistory: FundFlowHistoryEntry[];
+  predictionRecords: PredictionRecord[];
+}
+
 interface MarketBreadthSnapshot {
   asOf: string;
   dataStatus: 'available' | 'partial' | 'missing' | 'failed';
@@ -544,6 +597,8 @@ interface AnalysisContextSnapshot {
   marketBreadthSnapshot?: MarketBreadthSnapshot;
   northboundCapitalSnapshot?: NorthboundCapitalSnapshot;
   etfDirectionProxySnapshot?: EtfDirectionProxySnapshot;
+  fundFlowHistorySummary?: FundFlowHistorySummary;
+  predictionRecordsSummary?: PredictionRecordsSummary;
 }
 
 interface MarketStructureSummary {
@@ -683,6 +738,7 @@ interface GithubGistResponse {
 
 const GITHUB_API_VERSION = '2022-11-28';
 const DEFAULT_GIST_FILENAME = 'fund-manager-sync.json';
+const ANALYSIS_STATE_FILENAME = 'fund-manager-ai-state.json';
 const TELEGRAM_MESSAGE_LIMIT = 3900;
 const MORNINGSTAR_API_BASE = 'https://www.morningstar.cn/cn-api';
 const TENCENT_QUOTE_API = 'https://qt.gtimg.cn/q=';
@@ -698,6 +754,8 @@ const DEFAULT_FUND_FLOW_QUERY_TIMEOUT_MS = 3000;
 const DEFAULT_FUND_HOLDINGS_TIMEOUT_MS = 5000;
 const FAST_ANALYSIS_FUND_HOLDINGS_TIMEOUT_MS = 3000;
 const FUND_HOLDINGS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_FUND_FLOW_HISTORY_ENTRIES = 30;
+const MAX_PREDICTION_RECORDS = 60;
 const DEFAULT_AI_QUESTION =
   '请基于当前持仓、A 股市场指数、市场情绪、中文财经新闻和投资画像，重点判断当前是否适合加仓、是否需要减仓、是否达到清仓条件。请给出明确但条件化的结论、依据、触发条件和观察点；收盘后才写明日观察点，收盘前写今日观察点。';
 const SHORT_ANALYSIS_QUESTION =
@@ -979,7 +1037,7 @@ const parseCsvSet = (value: string | undefined) =>
       .filter(Boolean),
   );
 
-const getChinaMarketPhase = (date = new Date()) => {
+const getChinaMarketPhase = (date = new Date()): ChinaMarketPhase => {
   const parts = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai',
     hour12: false,
@@ -1313,6 +1371,75 @@ const readGistBackup = async (env: Env): Promise<FundBackupPayload> => {
   }
 
   return payload as FundBackupPayload;
+};
+
+const createEmptyAnalysisState = (): AnalysisStatePayload => ({
+  version: 1,
+  updatedAt: new Date().toISOString(),
+  fundFlowHistory: [],
+  predictionRecords: [],
+});
+
+const readGistAnalysisState = async (env: Env): Promise<AnalysisStatePayload> => {
+  try {
+    const token = requireEnv(env, 'GITHUB_TOKEN');
+    const gistId = requireEnv(env, 'GIST_ID');
+    const gist = await fetchJson<GithubGistResponse>(
+      `https://api.github.com/gists/${gistId}`,
+      {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'X-GitHub-Api-Version': GITHUB_API_VERSION,
+          'User-Agent': 'fund-manager-telegram-ai-reminder',
+        },
+      },
+      '读取 AI 分析状态 Gist',
+    );
+    const content = gist.files?.[ANALYSIS_STATE_FILENAME]?.content;
+    if (!content) return createEmptyAnalysisState();
+    const parsed = JSON.parse(content) as Partial<AnalysisStatePayload>;
+    if (parsed.version !== 1) return createEmptyAnalysisState();
+    return {
+      version: 1,
+      updatedAt: parsed.updatedAt || new Date().toISOString(),
+      fundFlowHistory: Array.isArray(parsed.fundFlowHistory) ? parsed.fundFlowHistory : [],
+      predictionRecords: Array.isArray(parsed.predictionRecords) ? parsed.predictionRecords : [],
+    };
+  } catch (error) {
+    console.warn('读取 AI 分析状态失败，使用空状态降级', error);
+    return createEmptyAnalysisState();
+  }
+};
+
+const writeGistAnalysisState = async (env: Env, state: AnalysisStatePayload) => {
+  try {
+    const token = requireEnv(env, 'GITHUB_TOKEN');
+    const gistId = requireEnv(env, 'GIST_ID');
+    await fetchJson<unknown>(
+      `https://api.github.com/gists/${gistId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'X-GitHub-Api-Version': GITHUB_API_VERSION,
+          'User-Agent': 'fund-manager-telegram-ai-reminder',
+        },
+        body: JSON.stringify({
+          files: {
+            [ANALYSIS_STATE_FILENAME]: {
+              content: JSON.stringify(state, null, 2),
+            },
+          },
+        }),
+      },
+      '写入 AI 分析状态 Gist',
+    );
+  } catch (error) {
+    console.warn('写入 AI 分析状态失败，已忽略本次持久化', error);
+  }
 };
 
 const fetchFundHoldings = async (
@@ -1961,6 +2088,105 @@ const buildFundFlowTrendItems = (latestItems: FundFlowItemSnapshot[]): FundFlowS
   });
 
   return trendItems.length > 0 ? trendItems : undefined;
+};
+
+const updateFundFlowHistory = (
+  state: AnalysisStatePayload,
+  fundFlowSnapshot: FundFlowSnapshot | undefined,
+): AnalysisStatePayload => {
+  if (!fundFlowSnapshot?.items.length || fundFlowSnapshot.dataStatus === 'failed') return state;
+  const date = getChinaDateString(new Date(fundFlowSnapshot.asOf));
+  const entry: FundFlowHistoryEntry = {
+    date,
+    asOf: fundFlowSnapshot.asOf,
+    dataStatus: fundFlowSnapshot.dataStatus,
+    items: fundFlowSnapshot.items.slice(0, 12),
+  };
+  const history = [entry, ...state.fundFlowHistory.filter((item) => item.date !== date)]
+    .sort((a, b) => b.date.localeCompare(a.date) || b.asOf.localeCompare(a.asOf))
+    .slice(0, MAX_FUND_FLOW_HISTORY_ENTRIES);
+  return { ...state, updatedAt: new Date().toISOString(), fundFlowHistory: history };
+};
+
+const buildFundFlowHistorySummary = (state: AnalysisStatePayload): FundFlowHistorySummary => {
+  const history = state.fundFlowHistory.slice(0, MAX_FUND_FLOW_HISTORY_ENTRIES);
+  if (history.length === 0) {
+    return {
+      asOf: null,
+      entries: 0,
+      persistent: false,
+      topThemes: [],
+      note: '暂无持久化资金流历史，只能使用当次资金流快照判断连续性。',
+    };
+  }
+
+  const latestDate = history[0].date;
+  const previousRankByTheme = new Map<string, number>();
+  history.slice(1).forEach((entry) => {
+    entry.items.forEach((item) => {
+      const key = `${item.category}:${item.name}`;
+      if (!previousRankByTheme.has(key)) previousRankByTheme.set(key, item.netInflowRank);
+    });
+  });
+
+  const aggregated = new Map<
+    string,
+    {
+      name: string;
+      category: 'sector' | 'concept';
+      appearances: number;
+      latestRank: number;
+      latestNetInflow: number;
+      latestSeenDate: string;
+    }
+  >();
+  history.forEach((entry) => {
+    entry.items.slice(0, 10).forEach((item) => {
+      const key = `${item.category}:${item.name}`;
+      const current = aggregated.get(key) ?? {
+        name: item.name,
+        category: item.category,
+        appearances: 0,
+        latestRank: item.netInflowRank,
+        latestNetInflow: item.netInflow,
+        latestSeenDate: entry.date,
+      };
+      current.appearances += 1;
+      if (entry.date >= current.latestSeenDate) {
+        current.latestRank = item.netInflowRank;
+        current.latestNetInflow = item.netInflow;
+        current.latestSeenDate = entry.date;
+      }
+      aggregated.set(key, current);
+    });
+  });
+
+  const topThemes = Array.from(aggregated.entries())
+    .map(([key, item]) => {
+      const previousRank = previousRankByTheme.get(key);
+      const rankChange = previousRank === undefined ? undefined : previousRank - item.latestRank;
+      const status = item.latestSeenDate !== latestDate ? 'cooling' : item.appearances >= 2 ? 'continuous' : 'new';
+      return { ...item, rankChange, status };
+    })
+    .sort((a, b) => b.appearances - a.appearances || a.latestRank - b.latestRank)
+    .slice(0, 8)
+    .map(({ name, category, appearances, latestRank, latestNetInflow, rankChange, status }) => ({
+      name,
+      category,
+      appearances,
+      latestRank,
+      latestNetInflow: round(latestNetInflow),
+      rankChange,
+      status,
+    }));
+
+  return {
+    asOf: history[0].asOf,
+    entries: history.length,
+    persistent: true,
+    topThemes,
+    note: `已持久化最近 ${history.length} 次资金流快照，可用于判断连续上榜、首次爆发和退潮方向。`,
+  };
 };
 
 const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undefined> => {
@@ -3338,6 +3564,77 @@ const buildAnalysisDiagnostics = (context: AnalysisContextSnapshot): AnalysisDia
   };
 };
 
+const extractPredictionConclusion = (text: string): PredictionRecord['conclusion'] => {
+  if (text.includes('偏涨')) return '偏涨';
+  if (text.includes('偏跌')) return '偏跌';
+  if (text.includes('震荡')) return '震荡';
+  if (text.includes('不确定')) return '不确定';
+  return '未识别';
+};
+
+const extractPredictionConfidence = (text: string): PredictionRecord['confidence'] => {
+  if (text.includes('高置信度') || text.includes('置信度：高') || text.includes('置信度: 高')) return '高';
+  if (text.includes('中置信度') || text.includes('置信度：中') || text.includes('置信度: 中')) return '中';
+  if (text.includes('低置信度') || text.includes('置信度：低') || text.includes('置信度: 低')) return '低';
+  return '未识别';
+};
+
+const appendPredictionRecord = (
+  state: AnalysisStatePayload,
+  context: AnalysisContextSnapshot,
+  analysis: string,
+): AnalysisStatePayload => {
+  const now = new Date();
+  const diagnostics = buildAnalysisDiagnostics(context);
+  const record: PredictionRecord = {
+    id: `${now.toISOString()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: now.toISOString(),
+    date: getChinaDateString(now),
+    marketPhase: getChinaMarketPhase(now),
+    conclusion: extractPredictionConclusion(analysis),
+    confidence: extractPredictionConfidence(analysis),
+    dataQualityScore: diagnostics.dataQuality.score,
+    portfolioDayGainPct: context.holdings.totalDayGainPct,
+    topFlowThemes: context.fundFlowSnapshot?.items.slice(0, 5).map((item) => item.name) ?? [],
+    analysisPreview: analysis.slice(0, 500),
+  };
+  return {
+    ...state,
+    updatedAt: now.toISOString(),
+    predictionRecords: [record, ...state.predictionRecords].slice(0, MAX_PREDICTION_RECORDS),
+  };
+};
+
+const buildPredictionRecordsSummary = (state: AnalysisStatePayload): PredictionRecordsSummary => {
+  const records = state.predictionRecords.slice(0, MAX_PREDICTION_RECORDS);
+  const recentDistribution: PredictionRecordsSummary['recentDistribution'] = {
+    偏涨: 0,
+    偏跌: 0,
+    震荡: 0,
+    不确定: 0,
+    未识别: 0,
+  };
+  records.slice(0, 30).forEach((record) => {
+    recentDistribution[record.conclusion] += 1;
+  });
+  return {
+    records: records.length,
+    latest: records[0]
+      ? {
+          date: records[0].date,
+          conclusion: records[0].conclusion,
+          confidence: records[0].confidence,
+          dataQualityScore: records[0].dataQualityScore,
+        }
+      : undefined,
+    recentDistribution,
+    note:
+      records.length > 0
+        ? '已保存历史预测记录；当前阶段仅用于校准表达和置信度，次日命中率归因将在后续接入。'
+        : '暂无历史预测记录，无法基于历史命中率校准置信度。',
+  };
+};
+
 const normalizePortfolioNewsText = (value: string | undefined) => (value || '').toLowerCase();
 
 const findPortfolioNewsRelation = (item: NewsItemSnapshot, keywords: PortfolioNewsKeyword[]) => {
@@ -3912,6 +4209,8 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
   const marketPhase = getChinaMarketPhase();
   const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
   const analysisDiagnostics = buildAnalysisDiagnostics(context);
+  const fundFlowHistory = context.fundFlowHistorySummary;
+  const predictionRecords = context.predictionRecordsSummary;
   const topExposures = holdings.underlyingExposures.slice(0, 8);
   const topHoldings = [...holdings.holdings]
     .sort((a, b) => b.marketValue - a.marketValue)
@@ -3979,6 +4278,8 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
       marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
     },
     analysisDiagnostics,
+    fundFlowHistory,
+    predictionRecords,
   };
 
   const roleInstruction =
@@ -4019,6 +4320,8 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
   const marketPhase = getChinaMarketPhase();
   const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
   const analysisDiagnostics = buildAnalysisDiagnostics(context);
+  const fundFlowHistory = context.fundFlowHistorySummary;
+  const predictionRecords = context.predictionRecordsSummary;
   const topHoldings = [...holdings.holdings]
     .sort((a, b) => Math.abs(b.dayChangeVal) - Math.abs(a.dayChangeVal))
     .slice(0, 8)
@@ -4079,6 +4382,8 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
     },
     marketStructure: buildMarketStructureSummary(marketSnapshot),
     analysisDiagnostics,
+    fundFlowHistory,
+    predictionRecords,
   };
 
   const roleInstruction =
@@ -4114,6 +4419,8 @@ const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: strin
   } = context;
   const marketPhase = getChinaMarketPhase();
   const analysisDiagnostics = buildAnalysisDiagnostics(context);
+  const fundFlowHistory = context.fundFlowHistorySummary;
+  const predictionRecords = context.predictionRecordsSummary;
   const marketContext = {
     marketPhase,
     aShareMarket: {
@@ -4154,6 +4461,8 @@ const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: strin
       dataCoverage: holdings.dataCoverage,
     },
     analysisDiagnostics,
+    fundFlowHistory,
+    predictionRecords,
   };
 
   const roleInstruction =
@@ -4188,6 +4497,8 @@ const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: s
   const action = resolvePositionActionLabel(question);
   const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
   const analysisDiagnostics = buildAnalysisDiagnostics(context);
+  const fundFlowHistory = context.fundFlowHistorySummary;
+  const predictionRecords = context.predictionRecordsSummary;
   const sortedFunds = [...holdings.holdings]
     .sort((a, b) => b.marketValue - a.marketValue)
     .slice(0, 10)
@@ -4241,6 +4552,8 @@ const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: s
       rotation: buildMarketRotationSnapshot(fundFlowSnapshot),
     },
     analysisDiagnostics,
+    fundFlowHistory,
+    predictionRecords,
   };
   const actionRules =
     action === '加仓'
@@ -4296,6 +4609,8 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
   const portfolioMarketFit = buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot);
   const marketRotation = buildMarketRotationSnapshot(fundFlowSnapshot);
   const analysisDiagnostics = buildAnalysisDiagnostics(context);
+  const fundFlowHistory = context.fundFlowHistorySummary;
+  const predictionRecords = context.predictionRecordsSummary;
 
   const modeInstruction =
     mode === 'risk'
@@ -4341,6 +4656,10 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
     `行业字段覆盖率: ${analysisDiagnostics.holdingsCoverage.sectorCoveragePct}%`,
     `弱匹配主题占比: ${analysisDiagnostics.holdingsCoverage.weakExposurePct}%`,
     `弱匹配组合暴露: ${analysisDiagnostics.holdingsCoverage.weakExposurePortfolioPct}%`,
+    fundFlowHistory?.entries ? `资金流历史: ${fundFlowHistory.entries} 次，${fundFlowHistory.note}` : '资金流历史: missing',
+    predictionRecords?.records !== undefined
+      ? `预测记录: ${predictionRecords.records} 条，${predictionRecords.note}`
+      : '预测记录: missing',
     `量化信号数据: ${quantSummary.status}`,
     `量化信号覆盖: ${quantSummary.availableCount}/${quantSummary.totalCount}`,
     `组合量化评分: ${quantSummary.score}`,
@@ -4854,27 +5173,34 @@ const buildAnalysisMessage = async (
     fetchEtfDirectionProxySnapshot(),
   ]);
   logStepDuration('读取市场/新闻/资金流', externalStartedAt);
+  const analysisState = updateFundFlowHistory(await readGistAnalysisState(env), fundFlowSnapshot);
+  const fundFlowHistorySummary = buildFundFlowHistorySummary(analysisState);
+  const predictionRecordsSummary = buildPredictionRecordsSummary(analysisState);
   const heldFundCodeSet = new Set(snapshot.heldFundCodes);
   const snapshotWithFallback: HoldingsSnapshot = {
     ...snapshot,
     fallbackBuildCandidates: buildFallbackBuildCandidates(fundFlowSnapshot, heldFundCodeSet),
   };
+  const analysisContext: AnalysisContextSnapshot = {
+    holdings: snapshotWithFallback,
+    marketSnapshot,
+    overseasMarketSnapshot,
+    newsSnapshot,
+    fundFlowSnapshot,
+    marketBreadthSnapshot,
+    northboundCapitalSnapshot,
+    etfDirectionProxySnapshot,
+    fundFlowHistorySummary,
+    predictionRecordsSummary,
+  };
   const aiStartedAt = Date.now();
-  const analysis = await analyzeHoldings(
-    env,
-    {
-      holdings: snapshotWithFallback,
-      marketSnapshot,
-      overseasMarketSnapshot,
-      newsSnapshot,
-      fundFlowSnapshot,
-      marketBreadthSnapshot,
-      northboundCapitalSnapshot,
-      etfDirectionProxySnapshot,
-    },
-    options?.question,
-  );
+  const analysis = await analyzeHoldings(env, analysisContext, options?.question);
   logStepDuration('AI 分析', aiStartedAt);
+  const nextAnalysisState =
+    options?.question === TOMORROW_PREDICTION_QUESTION
+      ? appendPredictionRecord(analysisState, analysisContext, analysis)
+      : analysisState;
+  await writeGistAnalysisState(env, nextAnalysisState);
   logStepDuration('完整分析流程', startedAt);
   const title = `${options?.title || '养基AI持仓分析'}\n时间：${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}\n`;
   const body = truncateForTelegram(analysis, options?.maxLength);
