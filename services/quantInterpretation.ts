@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 import type { AiRuntimeConfig } from './aiProviderConfig';
@@ -11,6 +10,12 @@ const QUANT_INTERPRETATION_STORAGE_KEY = 'fundManager.quantInterpretationCache.v
 interface CacheEntry {
   key: string;
   value: string;
+}
+
+interface OpenAiCompatibleResponse {
+  choices?: Array<{ message?: { content?: unknown } }>;
+  error?: { message?: unknown } | string;
+  message?: unknown;
 }
 
 const buildCacheKey = (analysis: QuantAnalysisResponse, runtime: AiRuntimeConfig) =>
@@ -71,6 +76,20 @@ const extractOpenAiContent = (response: unknown) => {
   return '';
 };
 
+const buildProxyTargetHeaders = (apiKey: string, targetBaseUrl: string) => ({
+  Authorization: `Bearer ${apiKey}`,
+  'Content-Type': 'application/json',
+  'X-LLM-Target-Base-URL': targetBaseUrl,
+});
+
+const extractErrorMessage = (payload: OpenAiCompatibleResponse | null, fallback: string) => {
+  if (!payload) return fallback;
+  if (typeof payload.error === 'string') return payload.error;
+  if (payload.error?.message) return String(payload.error.message);
+  if (payload.message) return String(payload.message);
+  return fallback;
+};
+
 export const clearQuantInterpretationCache = () => {
   try {
     localStorage.removeItem(QUANT_INTERPRETATION_STORAGE_KEY);
@@ -105,21 +124,25 @@ export const interpretQuantAnalysis = async (
   } else {
     const targetBaseUrl = runtime.provider === 'openai' ? OPENAI_BASE_URL : runtime.baseURL?.trim() || '';
     if (!targetBaseUrl) throw new Error('MISSING_BASE_URL');
-    const client = new OpenAI({
-      apiKey: runtime.apiKey,
-      dangerouslyAllowBrowser: true,
-      baseURL: getLlmProxyBaseUrl(),
-      defaultHeaders: { 'X-LLM-Target-Base-URL': targetBaseUrl },
+
+    const response = await fetch(`${getLlmProxyBaseUrl()}/chat/completions`, {
+      method: 'POST',
+      headers: buildProxyTargetHeaders(runtime.apiKey, targetBaseUrl),
+      body: JSON.stringify({
+        model: runtime.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: question },
+        ],
+        temperature: runtime.temperature ?? 0.2,
+      }),
     });
-    const response = await client.chat.completions.create({
-      model: runtime.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: question },
-      ],
-      temperature: runtime.temperature ?? 0.2,
-    });
-    answer = extractOpenAiContent(response);
+
+    const payload = (await response.json().catch(() => null)) as OpenAiCompatibleResponse | null;
+    if (!response.ok) {
+      throw new Error(extractErrorMessage(payload, `LLM_PROXY_REQUEST_FAILED_${response.status}`));
+    }
+    answer = extractOpenAiContent(payload);
   }
 
   if (!answer) throw new Error('EMPTY_LLM_CONTENT');

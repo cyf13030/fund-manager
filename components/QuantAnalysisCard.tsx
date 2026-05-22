@@ -117,8 +117,15 @@ export const QuantAnalysisCard: React.FC = () => {
     try {
       const text = await interpretQuantAnalysis(current, aiRuntime, { force });
       setInterpretation(text);
-    } catch {
-      setInterpretationError('AI 量化解读失败，请稍后重试。');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      const friendlyMessageMap: Record<string, string> = {
+        MISSING_API_KEY: '请先在设置中填写 AI 接口密钥。',
+        MISSING_MODEL: '请先在设置中选择或填写 AI 模型。',
+        MISSING_BASE_URL: '请先在设置中填写兼容接口服务地址。',
+        EMPTY_LLM_CONTENT: 'AI 返回内容为空，请稍后重试或更换模型。',
+      };
+      setInterpretationError(friendlyMessageMap[message] ?? `AI 量化解读失败：${message}`);
     } finally {
       setIsInterpreting(false);
     }
