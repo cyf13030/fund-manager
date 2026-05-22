@@ -664,6 +664,14 @@ const UP_DOWN_REASON_QUESTION =
 const TOMORROW_PREDICTION_QUESTION =
   '请只做明日涨跌预测，控制在 900 字以内。必须明确这是基于现有数据的条件化概率判断，不得写“必涨”“必跌”“一定”。请先给出“偏涨/偏跌/震荡/不确定”之一，并给出“高/中/低置信度”；必须结合 A 股市场状态、外围市场/指数期货（美股、港股、A50、汇率、商品）、盘后消息面、行业/概念资金流连续性、当前持仓底层暴露、近几日组合收益趋势和量化信号。请按“结论、概率判断、主要依据、明天重点看什么、触发条件、失效条件、不确定项”输出；如果市场、外围市场、盘后新闻、资金流连续性、底层持仓或近几日收益数据缺失，必须明确说明并降低置信度，不能编造。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings、fundDailyEarnings、marketSnapshot、overseasMarketSnapshot 等内部字段名。';
 const DETAILED_ANALYSIS_QUESTION = DEFAULT_AI_QUESTION;
+const ADD_POSITION_QUESTION =
+  '请只回答当前是否适合加仓，控制在 1000 字以内。加仓候选只能从当前已持有基金中选择，不能从自选未持有基金或资金流方向兜底候选中选择。请结合 A 股市场、中文财经新闻、持仓盈亏、仓位集中度、底层重合度和投资画像，给出结论、依据、触发条件和不适合加仓的风险。如果没有合适加仓候选，明确写“今日暂无适合加仓的基金”。最终回复不得出现内部字段名。';
+const BUILD_POSITION_QUESTION =
+  '请只回答今天哪个主题方向最值得建仓观察，控制在 1000 字以内。建仓观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合，因为这是主题强弱判断，不是具体基金推荐。必须先判断市场情绪，再提取今日利好方向和风险方向，并结合资金流入最强方向；如果资金流数据缺失或失败，必须说明“资金流数据暂不可用，本次仅基于市场情绪和新闻利好判断”，不得编造资金流。如果没有满足建仓观察条件的主题，必须输出“今日暂无明确建仓主题，仅做观察”。请按“市场情绪、今日利好方向、资金流入最强方向、今日建仓主题观察、观察方式、放弃观察条件”输出，不得把主题观察写成现在立即买入，最终回复不得出现内部字段名。';
+const REDUCE_POSITION_QUESTION =
+  '请只回答当前是否需要减仓，控制在 1000 字以内。必须结合 A 股市场、中文财经新闻、持仓盈亏、重合度和投资画像，给出结论、依据、触发条件和暂不减仓的条件。最终回复不得出现内部字段名。';
+const CLEAR_POSITION_QUESTION =
+  '请只回答当前是否达到清仓条件，控制在 1000 字以内。清仓判断必须严格，不能只因为单日涨跌；必须结合长期逻辑失效、风格偏离、风险画像冲突、重合度过高或明确止盈止损条件。最终回复不得出现内部字段名。';
 const MIDDAY_ANALYSIS_QUESTION =
   '请输出午盘休息分析，控制在 1000 字以内。重点总结上午市场情绪、A 股指数强弱、资金流入最强方向、中文财经新闻利好/风险，并判断下午是否适合观察、低吸、小额试探或暂不操作。建仓主题观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合。如果没有明确主题，必须输出“午盘建仓主题观察”，给出 1-3 个下午观察方向和触发条件，不得硬写买入建议。午盘不做激进操作建议，不要建议清仓。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
 const LATE_SESSION_ACTION_QUESTION =
@@ -709,31 +717,33 @@ const CHAT_COMMANDS: ChatCommandConfig[] = [
   {
     kind: 'analysis',
     aliases: ['加仓'],
-    question:
-      '请只回答当前是否适合加仓，控制在 1000 字以内。加仓候选只能从当前已持有基金中选择，不能从自选未持有基金或资金流方向兜底候选中选择。请结合 A 股市场、中文财经新闻、持仓盈亏、仓位集中度、底层重合度和投资画像，给出结论、依据、触发条件和不适合加仓的风险。如果没有合适加仓候选，明确写“今日暂无适合加仓的基金”。最终回复不得出现内部字段名。',
+    question: ADD_POSITION_QUESTION,
     maxLength: 1200,
   },
   {
     kind: 'analysis',
     aliases: ['建仓'],
-    question:
-      '请只回答今天哪个主题方向最值得建仓观察，控制在 1000 字以内。建仓观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合，因为这是主题强弱判断，不是具体基金推荐。必须先判断市场情绪，再提取今日利好方向和风险方向，并结合资金流入最强方向；如果资金流数据缺失或失败，必须说明“资金流数据暂不可用，本次仅基于市场情绪和新闻利好判断”，不得编造资金流。如果没有满足建仓观察条件的主题，必须输出“今日暂无明确建仓主题，仅做观察”。请按“市场情绪、今日利好方向、资金流入最强方向、今日建仓主题观察、观察方式、放弃观察条件”输出，不得把主题观察写成现在立即买入，最终回复不得出现内部字段名。',
+    question: BUILD_POSITION_QUESTION,
     maxLength: 1200,
   },
   {
     kind: 'analysis',
     aliases: ['减仓'],
-    question:
-      '请只回答当前是否需要减仓，控制在 1000 字以内。必须结合 A 股市场、中文财经新闻、持仓盈亏、重合度和投资画像，给出结论、依据、触发条件和暂不减仓的条件。最终回复不得出现内部字段名。',
+    question: REDUCE_POSITION_QUESTION,
     maxLength: 1200,
   },
   {
     kind: 'analysis',
     aliases: ['清仓'],
-    question:
-      '请只回答当前是否达到清仓条件，控制在 1000 字以内。清仓判断必须严格，不能只因为单日涨跌；必须结合长期逻辑失效、风格偏离、风险画像冲突、重合度过高或明确止盈止损条件。最终回复不得出现内部字段名。',
+    question: CLEAR_POSITION_QUESTION,
     maxLength: 1200,
   },
+];
+const POSITION_ACTION_QUESTIONS = [
+  ADD_POSITION_QUESTION,
+  BUILD_POSITION_QUESTION,
+  REDUCE_POSITION_QUESTION,
+  CLEAR_POSITION_QUESTION,
 ];
 const TELEGRAM_HELP_TEXT =
   '发送“分析”获取短版判断；发送“市场分析”获取市场环境判断；发送“涨跌”获取今天为什么涨/跌和当前信号；发送“预测”获取明日涨跌条件化判断；发送“量化分析”获取客观量化信号；发送“详细分析”获取完整分析；也可发送“建仓”“加仓”“减仓”“清仓”获取专项判断。';
@@ -3918,6 +3928,170 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
 ${JSON.stringify(upDownContext)}`;
 };
 
+const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: string) => {
+  const {
+    holdings,
+    marketSnapshot,
+    overseasMarketSnapshot,
+    newsSnapshot,
+    fundFlowSnapshot,
+    marketBreadthSnapshot,
+    northboundCapitalSnapshot,
+    etfDirectionProxySnapshot,
+  } = context;
+  const marketPhase = getChinaMarketPhase();
+  const marketContext = {
+    marketPhase,
+    aShareMarket: {
+      dataStatus: marketSnapshot?.dataStatus ?? 'missing',
+      indices: marketSnapshot?.indices.slice(0, 10) ?? [],
+    },
+    marketBreadth: marketBreadthSnapshot ?? null,
+    marketStructure: buildMarketStructureSummary(marketSnapshot),
+    fundFlow: {
+      dataStatus: fundFlowSnapshot?.dataStatus ?? 'missing',
+      unavailableReason: fundFlowSnapshot?.unavailableReason,
+      topItems: fundFlowSnapshot?.items.slice(0, 10) ?? [],
+      trendItems: fundFlowSnapshot?.trendItems?.slice(0, 8) ?? [],
+    },
+    marketRotation: buildMarketRotationSnapshot(fundFlowSnapshot),
+    capitalFlow: {
+      northbound: northboundCapitalSnapshot ?? null,
+      etfDirectionProxy: etfDirectionProxySnapshot ?? null,
+    },
+    overseasMarket: {
+      dataStatus: overseasMarketSnapshot?.dataStatus ?? 'missing',
+      items: overseasMarketSnapshot?.items.slice(0, 8) ?? [],
+    },
+    news: {
+      dataStatus: newsSnapshot?.dataStatus ?? 'missing',
+      session: newsSnapshot?.session ?? 'missing',
+      items:
+        newsSnapshot?.items.slice(0, 10).map((item) => ({
+          title: item.title,
+          source: item.source,
+          publishedAt: item.publishedAt,
+        })) ?? [],
+    },
+    portfolioRelevance: {
+      totalDayGainPct: holdings.totalDayGainPct,
+      topExposures: holdings.underlyingExposures.slice(0, 8),
+      marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
+      dataCoverage: holdings.dataCoverage,
+    },
+  };
+
+  const roleInstruction =
+    mode === 'risk'
+      ? '你是一位谨慎的 A 股市场风险分析助手，必须优先识别市场弱点和数据缺口。'
+      : '你是一位 A 股市场分析助手，必须聚焦市场环境、资金主线和对当前组合的影响。';
+
+  return `${roleInstruction}
+要求：
+1) 只基于“市场分析专用摘要”推理，不得编造摘要之外的指数、新闻、资金流或公告。
+2) 必须区分市场主线、资金流方向和当前组合底层暴露，不能把市场热题材直接说成组合已持有。
+3) 市场宽度如有个股样本，优先用上涨/下跌家数、涨跌停、平均涨跌幅和成交额判断；样本缺失时只能说明数据不足。
+4) ETF方向 proxy 不是 ETF 净申购，不能写成真实申购赎回数据；北向资金缺失时必须说明。
+5) 建仓部分只输出主题观察方向，不输出具体基金名称或基金代码。
+6) 如果市场、新闻、资金流或底层持仓数据缺失，必须明确说明，不得硬归因。
+7) 最终回复不得出现 dataStatus、marketSnapshot、fundFlowSnapshot、holdings 等字段名，必须转成自然语言。
+8) 控制在 1000 字以内，按“市场情绪、指数强弱、资金流方向、消息面影响、持仓影响、今日观察主题、风险提示”输出。
+
+市场分析专用摘要：
+${JSON.stringify(marketContext)}`;
+};
+
+const resolvePositionActionLabel = (question: string) => {
+  if (question === ADD_POSITION_QUESTION) return '加仓';
+  if (question === BUILD_POSITION_QUESTION) return '建仓';
+  if (question === REDUCE_POSITION_QUESTION) return '减仓';
+  return '清仓';
+};
+
+const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: string, mode: string) => {
+  const { holdings, marketSnapshot, newsSnapshot, fundFlowSnapshot, marketBreadthSnapshot } = context;
+  const action = resolvePositionActionLabel(question);
+  const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
+  const sortedFunds = [...holdings.holdings]
+    .sort((a, b) => b.marketValue - a.marketValue)
+    .slice(0, 10)
+    .map((fund) => ({
+      name: fund.name,
+      marketValue: round(fund.marketValue),
+      portfolioPct: holdings.totalAssets > 0 ? round((fund.marketValue / holdings.totalAssets) * 100) : 0,
+      dayChangePct: fund.dayChangePct,
+      totalGainPct: fund.totalGainPct,
+      quantSignal: fund.quantSignal?.signal,
+      fundCategory: fund.quantSignal?.fundCategory,
+      underlyingMarket: fund.quantSignal?.underlyingMarket,
+    }));
+  const actionContext = {
+    action,
+    marketPhase: getChinaMarketPhase(),
+    portfolio: {
+      totalAssets: holdings.totalAssets,
+      availableAssets: holdings.availableAssets ?? null,
+      totalDayGainPct: holdings.totalDayGainPct,
+      holdingGainPct: holdings.holdingGainPct,
+      transactionSettlement: holdings.transactionSettlement,
+      concentrationRisk: holdings.riskRadar.filter((item) => item.key === 'concentration' || item.level === 'high'),
+      quantSummary,
+      dataCoverage: holdings.dataCoverage,
+    },
+    funds: sortedFunds,
+    exposure: {
+      topExposures: holdings.underlyingExposures.slice(0, 8),
+      overlapCount: holdings.equityOverlap.length,
+      marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
+    },
+    market: {
+      dataStatus: marketSnapshot?.dataStatus ?? 'missing',
+      indices: marketSnapshot?.indices.slice(0, 8) ?? [],
+      breadth: marketBreadthSnapshot ?? null,
+      structure: buildMarketStructureSummary(marketSnapshot),
+    },
+    news: {
+      dataStatus: newsSnapshot?.dataStatus ?? 'missing',
+      items:
+        newsSnapshot?.items.slice(0, 8).map((item) => ({
+          title: item.title,
+          source: item.source,
+          publishedAt: item.publishedAt,
+        })) ?? [],
+    },
+    fundFlow: {
+      dataStatus: fundFlowSnapshot?.dataStatus ?? 'missing',
+      topItems: fundFlowSnapshot?.items.slice(0, 8) ?? [],
+      rotation: buildMarketRotationSnapshot(fundFlowSnapshot),
+    },
+  };
+  const actionRules =
+    action === '加仓'
+      ? '加仓候选只能从当前已持有基金中选择；如果没有合适候选，必须写“今日暂无适合加仓的基金”。'
+      : action === '建仓'
+        ? '建仓只推荐主题方向，不输出具体基金名称或基金代码；如果没有明确主题，必须写“今日暂无明确建仓主题，仅做观察”。'
+        : action === '减仓'
+          ? '减仓必须给出触发条件和暂不减仓条件，不能只因为单日波动。'
+          : '清仓判断必须严格，不能只因为单日涨跌，必须基于长期逻辑失效、风格偏离、风险画像冲突、重合度过高或明确止盈止损条件。';
+  const roleInstruction =
+    mode === 'risk'
+      ? `你是一位谨慎的基金组合${action}风险助手，必须优先识别不操作或降低仓位的条件。`
+      : `你是一位基金组合${action}专项判断助手，必须只回答本次${action}问题。`;
+
+  return `${roleInstruction}
+要求：
+1) 只基于“专项操作摘要”推理，不得编造摘要之外的指数、新闻、资金流或持仓事实。
+2) ${actionRules}
+3) 必须结合 A 股市场、消息面、资金流、持仓盈亏、底层暴露、重合度、量化摘要和交易确认状态。
+4) 待确认买入不能算已确认持仓；待确认卖出/调出资金不能算可立即使用现金。
+5) 如果市场、新闻、资金流、底层持仓或量化数据缺失，必须明确说明并降低结论强度。
+6) 最终回复不得出现 dataStatus、marketSnapshot、fundFlowSnapshot、holdings 等字段名，必须转成自然语言。
+7) 控制在 1000 字以内，按“结论、依据、触发条件、风险/放弃条件、数据缺口”输出。
+
+专项操作摘要：
+${JSON.stringify(actionContext)}`;
+};
+
 const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: string) => {
   const {
     holdings,
@@ -4129,7 +4303,11 @@ const analyzeHoldings = async (
       ? buildTomorrowPredictionPrompt(context, mode)
       : question === UP_DOWN_REASON_QUESTION
         ? buildUpDownReasonPrompt(context, mode)
-      : buildHoldingsAnalysisPrompt(context, mode);
+        : question === MARKET_ANALYSIS_QUESTION
+          ? buildMarketAnalysisPrompt(context, mode)
+          : POSITION_ACTION_QUESTIONS.includes(question)
+            ? buildPositionActionPrompt(context, question, mode)
+            : buildHoldingsAnalysisPrompt(context, mode);
   const endpoint = resolveAiEndpoint(env);
 
   if (endpoint.provider === 'gemini') {

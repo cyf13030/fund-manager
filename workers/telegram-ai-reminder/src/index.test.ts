@@ -986,9 +986,9 @@ describe('telegram ai reminder worker', () => {
 
     expect(response.status).toBe(200);
     const aiBody = findAiRequestBody(fetchMock);
-    expect(aiBody.messages[0].content).toContain('资金流数据: failed');
-    expect(aiBody.messages[0].content).toContain('资金流数据暂不可用');
-    expect(aiBody.messages[0].content).toContain('不得编造资金流入方向或金额');
+    expect(aiBody.messages[0].content).toContain('专项操作摘要');
+    expect(aiBody.messages[0].content).toContain('"dataStatus":"failed"');
+    expect(aiBody.messages[0].content).toContain('如果市场、新闻、资金流、底层持仓或量化数据缺失，必须明确说明');
     expect(aiBody.messages[1].content).toContain('资金流数据暂不可用，本次仅基于市场情绪和新闻利好判断');
   });
 
@@ -1090,6 +1090,9 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('A 股市场环境、主要指数强弱');
     expect(aiBody.messages[1].content).toContain('市场情绪、指数强弱、资金流方向、消息面影响、持仓影响、今日观察主题、风险提示');
     expect(aiBody.messages[1].content).toContain('不推荐具体基金名称或基金代码');
+    expect(aiBody.messages[0].content).toContain('市场分析专用摘要');
+    expect(aiBody.messages[0].content).toContain('portfolioRelevance');
+    expect(aiBody.messages[0].content).not.toContain('buildCandidates');
     expect(aiBody.messages[1].content).not.toContain('简短但全面');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
@@ -1363,6 +1366,9 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('加仓候选只能从当前已持有基金中选择');
     expect(aiBody.messages[1].content).not.toContain('holdings 当前');
     expect(aiBody.messages[1].content).toContain('1000 字以内');
+    expect(aiBody.messages[0].content).toContain('专项操作摘要');
+    expect(aiBody.messages[0].content).toContain('action');
+    expect(aiBody.messages[0].content).not.toContain('buildCandidates');
   });
 
   it('Telegram 发送“建仓”会触发建仓主题观察专项短答', async () => {
@@ -1390,9 +1396,10 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('不得把主题观察写成现在立即买入');
     expect(aiBody.messages[1].content).toContain('最终回复不得出现内部字段名');
     expect(aiBody.messages[1].content).not.toContain('为什么不是已有基金');
-    expect(aiBody.messages[0].content).toContain('未持有基金B');
-    expect(aiBody.messages[0].content).toContain('"heldFundCodes"');
-    expect(aiBody.messages[0].content).toContain('当前A股阶段:');
+    expect(aiBody.messages[0].content).toContain('专项操作摘要');
+    expect(aiBody.messages[0].content).not.toContain('未持有基金B');
+    expect(aiBody.messages[0].content).not.toContain('"heldFundCodes"');
+    expect(aiBody.messages[0].content).toContain('marketPhase');
   });
 
   it('建仓候选为空时仍只要求输出主题方向', async () => {
@@ -1434,10 +1441,9 @@ describe('telegram ai reminder worker', () => {
 
     expect(response.status).toBe(200);
     const aiBody = findAiRequestBody(fetchMock);
-    expect(aiBody.messages[0].content).toContain('未持有自选建仓候选数量: 0');
-    expect(aiBody.messages[0].content).toContain('资金流兜底建仓候选数量:');
-    expect(aiBody.messages[0].content).toContain('fallbackBuildCandidates');
-    expect(aiBody.messages[0].content).toContain('fundFlowFallback');
+    expect(aiBody.messages[0].content).toContain('专项操作摘要');
+    expect(aiBody.messages[0].content).not.toContain('fallbackBuildCandidates');
+    expect(aiBody.messages[0].content).not.toContain('fundFlowFallback');
     expect(aiBody.messages[0].content).toContain('人工智能');
     expect(aiBody.messages[1].content).toContain('建仓观察只推荐主题方向');
     expect(aiBody.messages[1].content).toContain('不输出具体基金名称或基金代码');
