@@ -51,6 +51,7 @@ describe('newsSummary', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toContain('/news-summary?t=');
     expect(init).toMatchObject({ cache: 'no-store' });
-    expect(init.headers).toMatchObject({ 'Cache-Control': 'no-cache' });
+    expect(init.headers).toMatchObject({ Accept: 'application/json' });
+    expect(init.headers).not.toHaveProperty('Cache-Control');
   });
 });

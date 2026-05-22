@@ -803,7 +803,7 @@ const json = (body: unknown, status = 200) =>
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept, Cache-Control',
       'Cache-Control': 'no-store',
     },
   });
@@ -4714,6 +4714,10 @@ const setupTelegramWebhook = async (request: Request, env: Env) => {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === 'OPTIONS') {
+      return json({ ok: true });
+    }
+
     if (url.pathname === '/health') {
       return json({ ok: true, service: 'telegram-ai-reminder' });
     }

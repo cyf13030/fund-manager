@@ -212,7 +212,7 @@ export const fetchNewsSummary = async (force = false): Promise<NewsSummaryRespon
     if (force) url.searchParams.set('t', String(now));
     const res = await fetch(url.toString(), {
       cache: 'no-store',
-      headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
+      headers: { Accept: 'application/json' },
     });
     if (!res.ok) return null;
 
