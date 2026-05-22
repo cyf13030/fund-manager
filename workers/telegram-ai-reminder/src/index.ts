@@ -572,6 +572,16 @@ interface PortfolioMarketFitSummary {
   reason: string;
 }
 
+type ChatCommandKind = 'analysis' | 'profit' | 'intradayProfit' | 'detailedIntradayProfit' | 'quantAnalysis';
+
+interface ChatCommandConfig {
+  kind: ChatCommandKind;
+  aliases: string[];
+  question?: string;
+  maxLength?: number;
+  title?: string;
+}
+
 interface TelegramUpdate {
   message?: {
     text?: string;
@@ -680,40 +690,51 @@ const SCHEDULED_ANALYSIS_CONFIG: Record<
     maxLength: 1600,
   },
 };
-const COMMAND_QUESTION_MAP: Record<string, { question: string; maxLength?: number; title?: string }> = {
-  分析: { question: SHORT_ANALYSIS_QUESTION, maxLength: 900 },
-  市场分析: { question: MARKET_ANALYSIS_QUESTION, maxLength: 1200, title: '养基AI市场分析' },
-  涨跌: { question: UP_DOWN_REASON_QUESTION, maxLength: 900, title: '养基AI涨跌归因' },
-  预测: { question: TOMORROW_PREDICTION_QUESTION, maxLength: 1000, title: '养基AI明日涨跌预测' },
-  明天涨跌: { question: TOMORROW_PREDICTION_QUESTION, maxLength: 1000, title: '养基AI明日涨跌预测' },
-  明天预测: { question: TOMORROW_PREDICTION_QUESTION, maxLength: 1000, title: '养基AI明日涨跌预测' },
-  详细分析: { question: DETAILED_ANALYSIS_QUESTION },
-  加仓: {
+const CHAT_COMMANDS: ChatCommandConfig[] = [
+  { kind: 'detailedIntradayProfit', aliases: ['详细盘中收益', '详细实时收益'] },
+  { kind: 'intradayProfit', aliases: ['今日盘中实时收益', '盘中实时收益', '盘中收益', '实时收益'] },
+  { kind: 'profit', aliases: ['今日盈利', '今日收益'] },
+  { kind: 'quantAnalysis', aliases: ['量化分析', '量化信号', '基金量化'] },
+  { kind: 'analysis', aliases: ['分析'], question: SHORT_ANALYSIS_QUESTION, maxLength: 900 },
+  { kind: 'analysis', aliases: ['市场分析'], question: MARKET_ANALYSIS_QUESTION, maxLength: 1200, title: '养基AI市场分析' },
+  { kind: 'analysis', aliases: ['涨跌'], question: UP_DOWN_REASON_QUESTION, maxLength: 900, title: '养基AI涨跌归因' },
+  {
+    kind: 'analysis',
+    aliases: ['预测', '明天涨跌', '明天预测'],
+    question: TOMORROW_PREDICTION_QUESTION,
+    maxLength: 1000,
+    title: '养基AI明日涨跌预测',
+  },
+  { kind: 'analysis', aliases: ['详细分析'], question: DETAILED_ANALYSIS_QUESTION },
+  {
+    kind: 'analysis',
+    aliases: ['加仓'],
     question:
-      '请只回答当前是否适合加仓，控制在 1000 字以内。加仓候选只能从 holdings 当前已持有基金中选择，不能从 buildCandidates 中选择。请结合 A 股市场、中文财经新闻、持仓盈亏、仓位集中度、底层重合度和投资画像，给出结论、依据、触发条件和不适合加仓的风险。如果没有合适加仓候选，明确写“今日暂无适合加仓的基金”。',
+      '请只回答当前是否适合加仓，控制在 1000 字以内。加仓候选只能从当前已持有基金中选择，不能从自选未持有基金或资金流方向兜底候选中选择。请结合 A 股市场、中文财经新闻、持仓盈亏、仓位集中度、底层重合度和投资画像，给出结论、依据、触发条件和不适合加仓的风险。如果没有合适加仓候选，明确写“今日暂无适合加仓的基金”。最终回复不得出现内部字段名。',
     maxLength: 1200,
   },
-  建仓: {
+  {
+    kind: 'analysis',
+    aliases: ['建仓'],
     question:
-      '请只回答今天哪个主题方向最值得建仓观察，控制在 1000 字以内。建仓观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合，因为这是主题强弱判断，不是具体基金推荐。必须先判断市场情绪，再提取今日利好方向和风险方向，并结合资金流入最强方向；如果资金流数据缺失或失败，必须说明“资金流数据暂不可用，本次仅基于市场情绪和新闻利好判断”，不得编造资金流。如果没有满足建仓观察条件的主题，必须输出“今日暂无明确建仓主题，仅做观察”。请按“市场情绪、今日利好方向、资金流入最强方向、今日建仓主题观察、观察方式、放弃观察条件”输出，不得把主题观察写成现在立即买入，最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings、heldFundCodes 等内部字段名。',
+      '请只回答今天哪个主题方向最值得建仓观察，控制在 1000 字以内。建仓观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合，因为这是主题强弱判断，不是具体基金推荐。必须先判断市场情绪，再提取今日利好方向和风险方向，并结合资金流入最强方向；如果资金流数据缺失或失败，必须说明“资金流数据暂不可用，本次仅基于市场情绪和新闻利好判断”，不得编造资金流。如果没有满足建仓观察条件的主题，必须输出“今日暂无明确建仓主题，仅做观察”。请按“市场情绪、今日利好方向、资金流入最强方向、今日建仓主题观察、观察方式、放弃观察条件”输出，不得把主题观察写成现在立即买入，最终回复不得出现内部字段名。',
     maxLength: 1200,
   },
-  减仓: {
+  {
+    kind: 'analysis',
+    aliases: ['减仓'],
     question:
-      '请只回答当前是否需要减仓，控制在 1000 字以内。必须结合 A 股市场、中文财经新闻、持仓盈亏、重合度和投资画像，给出结论、依据、触发条件和暂不减仓的条件。',
+      '请只回答当前是否需要减仓，控制在 1000 字以内。必须结合 A 股市场、中文财经新闻、持仓盈亏、重合度和投资画像，给出结论、依据、触发条件和暂不减仓的条件。最终回复不得出现内部字段名。',
     maxLength: 1200,
   },
-  清仓: {
+  {
+    kind: 'analysis',
+    aliases: ['清仓'],
     question:
-      '请只回答当前是否达到清仓条件，控制在 1000 字以内。清仓判断必须严格，不能只因为单日涨跌；必须结合长期逻辑失效、风格偏离、风险画像冲突、重合度过高或明确止盈止损条件。',
+      '请只回答当前是否达到清仓条件，控制在 1000 字以内。清仓判断必须严格，不能只因为单日涨跌；必须结合长期逻辑失效、风格偏离、风险画像冲突、重合度过高或明确止盈止损条件。最终回复不得出现内部字段名。',
     maxLength: 1200,
   },
-};
-const TELEGRAM_ANALYSIS_COMMANDS = Object.keys(COMMAND_QUESTION_MAP);
-const PROFIT_COMMANDS = ['今日盈利', '今日收益'];
-const INTRADAY_PROFIT_COMMANDS = ['今日盘中实时收益', '盘中实时收益', '盘中收益', '实时收益'];
-const DETAILED_INTRADAY_PROFIT_COMMANDS = ['详细盘中收益', '详细实时收益'];
-const QUANT_ANALYSIS_COMMANDS = ['量化分析', '量化信号', '基金量化'];
+];
 const TELEGRAM_HELP_TEXT =
   '发送“分析”获取短版判断；发送“市场分析”获取市场环境判断；发送“涨跌”获取今天为什么涨/跌和当前信号；发送“预测”获取明日涨跌条件化判断；发送“量化分析”获取客观量化信号；发送“详细分析”获取完整分析；也可发送“建仓”“加仓”“减仓”“清仓”获取专项判断。';
 const TELEGRAM_ANALYSIS_PENDING_TEXT = '收到，正在结合市场情绪、资金流和持仓分析...';
@@ -3804,6 +3825,99 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
 ${JSON.stringify(predictionContext)}`;
 };
 
+const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string) => {
+  const {
+    holdings,
+    marketSnapshot,
+    newsSnapshot,
+    fundFlowSnapshot,
+    marketBreadthSnapshot,
+    northboundCapitalSnapshot,
+    etfDirectionProxySnapshot,
+  } = context;
+  const marketPhase = getChinaMarketPhase();
+  const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
+  const topHoldings = [...holdings.holdings]
+    .sort((a, b) => Math.abs(b.dayChangeVal) - Math.abs(a.dayChangeVal))
+    .slice(0, 8)
+    .map((item) => ({
+      name: item.name,
+      marketValue: round(item.marketValue),
+      dayChangePct: item.dayChangePct,
+      dayChangeVal: item.dayChangeVal,
+      totalGainPct: item.totalGainPct,
+      quantSignal: item.quantSignal?.signal,
+      underlyingMarket: item.quantSignal?.underlyingMarket,
+      fundCategory: item.quantSignal?.fundCategory,
+    }));
+
+  const upDownContext = {
+    marketPhase,
+    portfolio: {
+      totalAssets: holdings.totalAssets,
+      totalDayGain: holdings.totalDayGain,
+      totalDayGainPct: holdings.totalDayGainPct,
+      holdingGainPct: holdings.holdingGainPct,
+      dailyEarningsTrend: holdings.dailyEarningsSummary?.trendText ?? null,
+      transactionSettlement: holdings.transactionSettlement,
+      quantSummary,
+      dataCoverage: holdings.dataCoverage,
+    },
+    topHoldings,
+    portfolioExposure: {
+      topExposures: holdings.underlyingExposures.slice(0, 8),
+      equityOverlapCount: holdings.equityOverlap.length,
+      marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
+    },
+    aShareMarket: {
+      dataStatus: marketSnapshot?.dataStatus ?? 'missing',
+      indices: marketSnapshot?.indices.slice(0, 10) ?? [],
+    },
+    news: {
+      dataStatus: newsSnapshot?.dataStatus ?? 'missing',
+      session: newsSnapshot?.session ?? 'missing',
+      items:
+        newsSnapshot?.items.slice(0, 8).map((item) => ({
+          title: item.title,
+          source: item.source,
+          publishedAt: item.publishedAt,
+        })) ?? [],
+    },
+    fundFlow: {
+      dataStatus: fundFlowSnapshot?.dataStatus ?? 'missing',
+      unavailableReason: fundFlowSnapshot?.unavailableReason,
+      topItems: fundFlowSnapshot?.items.slice(0, 8) ?? [],
+      trendItems: fundFlowSnapshot?.trendItems?.slice(0, 6) ?? [],
+    },
+    marketBreadth: marketBreadthSnapshot ?? null,
+    marketRotation: buildMarketRotationSnapshot(fundFlowSnapshot),
+    capitalFlow: {
+      northbound: northboundCapitalSnapshot ?? null,
+      etfDirectionProxy: etfDirectionProxySnapshot ?? null,
+    },
+    marketStructure: buildMarketStructureSummary(marketSnapshot),
+  };
+
+  const roleInstruction =
+    mode === 'risk'
+      ? '你是一位谨慎的基金组合涨跌归因助手，必须优先识别下跌风险和数据不足。'
+      : '你是一位基金组合今日涨跌归因助手，必须用短句解释涨跌来源和当前信号。';
+
+  return `${roleInstruction}
+要求：
+1) 只基于“今日涨跌归因摘要”推理，不得编造摘要之外的指数、新闻、资金流或持仓表现。
+2) 必须先判断当前更偏“上涨、下跌、震荡、不确定”之一；如果市场未开盘或数据不足，必须说明判断口径并降低确定性。
+3) 解释“为什么涨/跌”时，必须同时区分市场因素、资金流因素、消息面因素、持仓暴露因素和量化/风险因素。
+4) 当前组合方向必须结合持仓日收益、底层暴露、持仓匹配度、市场宽度、行业轮动、北向资金和 ETF方向 proxy；不能只复述指数涨跌。
+5) ETF方向 proxy 不是 ETF 净申购，不能写成真实申购赎回数据；北向资金缺失时必须说明。
+6) 如果底层持仓、新闻、资金流或量化数据缺失，必须明确说明，不能硬归因。
+7) 最终回复不得出现 dataStatus、trendItems、marketSnapshot、fundFlowSnapshot、holdings 等字段名，必须转成自然语言。
+8) 控制在 800 字以内，按“结论、上涨/下跌原因、当前信号、证据、不确定项”输出。
+
+今日涨跌归因摘要：
+${JSON.stringify(upDownContext)}`;
+};
+
 const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: string) => {
   const {
     holdings,
@@ -4013,6 +4127,8 @@ const analyzeHoldings = async (
   const systemPrompt =
     question === TOMORROW_PREDICTION_QUESTION
       ? buildTomorrowPredictionPrompt(context, mode)
+      : question === UP_DOWN_REASON_QUESTION
+        ? buildUpDownReasonPrompt(context, mode)
       : buildHoldingsAnalysisPrompt(context, mode);
   const endpoint = resolveAiEndpoint(env);
 
@@ -4441,30 +4557,13 @@ const isAuthorizedTelegramWebhook = (request: Request, env: Env) => {
   return request.headers.get('X-Telegram-Bot-Api-Secret-Token') === env.TELEGRAM_WEBHOOK_SECRET;
 };
 
-const resolveTelegramCommandConfig = (text: string) => {
-  const normalized = text.trim().replace(/^\//, '').toLowerCase();
-  const command = TELEGRAM_ANALYSIS_COMMANDS.find((item) => item.toLowerCase() === normalized);
-  return command ? COMMAND_QUESTION_MAP[command] : null;
-};
+const normalizeCommandText = (text: string) => text.trim().replace(/^\//, '').toLowerCase();
 
-const isProfitCommand = (text: string) => {
+const resolveChatCommand = (text: string) => {
   const normalized = text.trim().replace(/^\//, '').toLowerCase();
-  return PROFIT_COMMANDS.some((command) => command.toLowerCase() === normalized);
-};
-
-const isIntradayProfitCommand = (text: string) => {
-  const normalized = text.trim().replace(/^\//, '').toLowerCase();
-  return INTRADAY_PROFIT_COMMANDS.some((command) => command.toLowerCase() === normalized);
-};
-
-const isDetailedIntradayProfitCommand = (text: string) => {
-  const normalized = text.trim().replace(/^\//, '').toLowerCase();
-  return DETAILED_INTRADAY_PROFIT_COMMANDS.some((command) => command.toLowerCase() === normalized);
-};
-
-const isQuantAnalysisCommand = (text: string) => {
-  const normalized = text.trim().replace(/^\//, '').toLowerCase();
-  return QUANT_ANALYSIS_COMMANDS.some((command) => command.toLowerCase() === normalized);
+  return CHAT_COMMANDS.find((command) =>
+    command.aliases.some((alias) => normalizeCommandText(alias) === normalized),
+  );
 };
 
 const handleTelegramWebhook = async (request: Request, env: Env) => {
@@ -4482,16 +4581,22 @@ const handleTelegramWebhook = async (request: Request, env: Env) => {
     return json({ ok: true, ignored: true });
   }
 
-  if (isProfitCommand(text) || isIntradayProfitCommand(text) || isDetailedIntradayProfitCommand(text)) {
+  const command = resolveChatCommand(text);
+  if (!command) {
+    const sentMessages = await sendTelegramMessage(env, TELEGRAM_HELP_TEXT, chatIdStr);
+    return json({ ok: true, handled: 'help', sentMessages });
+  }
+
+  if (command.kind === 'profit' || command.kind === 'intradayProfit' || command.kind === 'detailedIntradayProfit') {
     const profitMessage = await buildTodayProfitMessage(env, {
-      intraday: isIntradayProfitCommand(text) || isDetailedIntradayProfitCommand(text),
-      detailed: isDetailedIntradayProfitCommand(text),
+      intraday: command.kind === 'intradayProfit' || command.kind === 'detailedIntradayProfit',
+      detailed: command.kind === 'detailedIntradayProfit',
     });
     const sentMessages = await sendTelegramMessage(env, profitMessage, chatIdStr);
     return json({ ok: true, handled: 'todayProfit', sentMessages });
   }
 
-  if (isQuantAnalysisCommand(text)) {
+  if (command.kind === 'quantAnalysis') {
     const pendingMessages = await sendTelegramMessage(env, TELEGRAM_ANALYSIS_PENDING_TEXT, chatIdStr);
     try {
       const quantMessage = await buildQuantAnalysisMessage(env);
@@ -4507,15 +4612,9 @@ const handleTelegramWebhook = async (request: Request, env: Env) => {
     }
   }
 
-  const commandConfig = resolveTelegramCommandConfig(text);
-  if (!commandConfig) {
-    const sentMessages = await sendTelegramMessage(env, TELEGRAM_HELP_TEXT, chatIdStr);
-    return json({ ok: true, handled: 'help', sentMessages });
-  }
-
   const pendingMessages = await sendTelegramMessage(env, TELEGRAM_ANALYSIS_PENDING_TEXT, chatIdStr);
   try {
-    const analysisMessage = await buildAnalysisMessage(env, commandConfig);
+    const analysisMessage = await buildAnalysisMessage(env, command);
     const analysisMessages = await sendTelegramMessage(env, analysisMessage.text, chatIdStr);
     return json({
       ok: true,
@@ -4586,14 +4685,15 @@ const handleQqOfficialWebhook = async (request: Request, env: Env) => {
   }
 
   const commandText = extractQqOfficialCommandText(message.content);
-  if (
-    isProfitCommand(commandText) ||
-    isIntradayProfitCommand(commandText) ||
-    isDetailedIntradayProfitCommand(commandText)
-  ) {
+  const command = resolveChatCommand(commandText);
+  if (!command) {
+    return json({ ok: true, handled: 'help' });
+  }
+
+  if (command.kind === 'profit' || command.kind === 'intradayProfit' || command.kind === 'detailedIntradayProfit') {
     const profitMessage = await buildTodayProfitMessage(env, {
-      intraday: isIntradayProfitCommand(commandText) || isDetailedIntradayProfitCommand(commandText),
-      detailed: isDetailedIntradayProfitCommand(commandText),
+      intraday: command.kind === 'intradayProfit' || command.kind === 'detailedIntradayProfit',
+      detailed: command.kind === 'detailedIntradayProfit',
     });
     const sentMessages = await sendQqOfficialGroupTextChunks({
       env,
@@ -4605,7 +4705,7 @@ const handleQqOfficialWebhook = async (request: Request, env: Env) => {
     return json({ ok: true, handled: 'todayProfit', sentMessages });
   }
 
-  if (isQuantAnalysisCommand(commandText)) {
+  if (command.kind === 'quantAnalysis') {
     const pendingMessages = await sendQqOfficialGroupTextChunks({
       env,
       groupOpenid: message.group_openid,
@@ -4644,11 +4744,6 @@ const handleQqOfficialWebhook = async (request: Request, env: Env) => {
     }
   }
 
-  const commandConfig = resolveTelegramCommandConfig(commandText);
-  if (!commandConfig) {
-    return json({ ok: true, handled: 'help' });
-  }
-
   const pendingMessages = await sendQqOfficialGroupTextChunks({
     env,
     groupOpenid: message.group_openid,
@@ -4658,7 +4753,7 @@ const handleQqOfficialWebhook = async (request: Request, env: Env) => {
   });
 
   try {
-    const analysisMessage = await buildAnalysisMessage(env, commandConfig);
+    const analysisMessage = await buildAnalysisMessage(env, command);
     const analysisMessages = await sendQqOfficialGroupTextChunks({
       env,
       groupOpenid: message.group_openid,
@@ -4734,20 +4829,21 @@ const handleOneBotWebhook = async (request: Request, env: Env) => {
   }
 
   const commandText = extractOneBotCommandText(event);
-  if (
-    isProfitCommand(commandText) ||
-    isIntradayProfitCommand(commandText) ||
-    isDetailedIntradayProfitCommand(commandText)
-  ) {
+  const command = resolveChatCommand(commandText);
+  if (!command) {
+    return json({ ok: true, ignored: true });
+  }
+
+  if (command.kind === 'profit' || command.kind === 'intradayProfit' || command.kind === 'detailedIntradayProfit') {
     const profitMessage = await buildTodayProfitMessage(env, {
-      intraday: isIntradayProfitCommand(commandText) || isDetailedIntradayProfitCommand(commandText),
-      detailed: isDetailedIntradayProfitCommand(commandText),
+      intraday: command.kind === 'intradayProfit' || command.kind === 'detailedIntradayProfit',
+      detailed: command.kind === 'detailedIntradayProfit',
     });
     const sentMessages = await sendOneBotGroupTextChunks(env, groupId, profitMessage);
     return json({ ok: true, handled: 'todayProfit', sentMessages });
   }
 
-  if (isQuantAnalysisCommand(commandText)) {
+  if (command.kind === 'quantAnalysis') {
     const pendingMessages = await sendOneBotGroupTextChunks(env, groupId, TELEGRAM_ANALYSIS_PENDING_TEXT);
     try {
       const quantMessage = await buildQuantAnalysisMessage(env);
@@ -4768,14 +4864,9 @@ const handleOneBotWebhook = async (request: Request, env: Env) => {
     }
   }
 
-  const commandConfig = resolveTelegramCommandConfig(commandText);
-  if (!commandConfig) {
-    return json({ ok: true, ignored: true });
-  }
-
   const pendingMessages = await sendOneBotGroupTextChunks(env, groupId, TELEGRAM_ANALYSIS_PENDING_TEXT);
   try {
-    const analysisMessage = await buildAnalysisMessage(env, commandConfig);
+    const analysisMessage = await buildAnalysisMessage(env, command);
     const analysisMessages = await sendOneBotGroupTextChunks(env, groupId, analysisMessage.text);
     return json({
       ok: true,

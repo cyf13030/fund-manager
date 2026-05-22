@@ -1115,6 +1115,9 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('今天涨跌归因分析');
     expect(aiBody.messages[1].content).toContain('结论、上涨/下跌原因、当前信号、证据、不确定项');
     expect(aiBody.messages[1].content).toContain('不能只复述数据');
+    expect(aiBody.messages[0].content).toContain('今日涨跌归因摘要');
+    expect(aiBody.messages[0].content).toContain('marketFit');
+    expect(aiBody.messages[0].content).not.toContain('buildCandidates');
     expect(aiBody.messages[1].content).not.toContain('简短但全面');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
   });
@@ -1357,7 +1360,8 @@ describe('telegram ai reminder worker', () => {
     expect(response.status).toBe(200);
     const aiBody = findAiRequestBody(fetchMock);
     expect(aiBody.messages[1].content).toContain('只回答当前是否适合加仓');
-    expect(aiBody.messages[1].content).toContain('加仓候选只能从 holdings 当前已持有基金中选择');
+    expect(aiBody.messages[1].content).toContain('加仓候选只能从当前已持有基金中选择');
+    expect(aiBody.messages[1].content).not.toContain('holdings 当前');
     expect(aiBody.messages[1].content).toContain('1000 字以内');
   });
 
@@ -1384,7 +1388,7 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('市场情绪、今日利好方向、资金流入最强方向、今日建仓主题观察、观察方式、放弃观察条件');
     expect(aiBody.messages[1].content).toContain('今日暂无明确建仓主题，仅做观察');
     expect(aiBody.messages[1].content).toContain('不得把主题观察写成现在立即买入');
-    expect(aiBody.messages[1].content).toContain('最终回复不得出现 buildCandidates、fallbackBuildCandidates');
+    expect(aiBody.messages[1].content).toContain('最终回复不得出现内部字段名');
     expect(aiBody.messages[1].content).not.toContain('为什么不是已有基金');
     expect(aiBody.messages[0].content).toContain('未持有基金B');
     expect(aiBody.messages[0].content).toContain('"heldFundCodes"');
@@ -2040,5 +2044,24 @@ describe('telegram ai reminder worker', () => {
     const telegramBody = JSON.parse(telegramCall?.[1].body as string) as { text: string };
     expect(telegramBody.text).toContain('发送“分析”');
     expect(telegramBody.text).toContain('建仓');
+  });
+
+  it('Telegram 指令只做精确匹配，不把自然语言当作分析指令', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '分析一下', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+    const body = (await response.json()) as { ok: boolean; handled: string; sentMessages: number };
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ ok: true, handled: 'help', sentMessages: 1 });
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/chat/completions'))).toBe(false);
   });
 });
