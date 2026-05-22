@@ -4,10 +4,28 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QuantAnalysisCard } from '../QuantAnalysisCard';
 
 const fetchQuantAnalysisMock = vi.fn();
+const interpretQuantAnalysisMock = vi.fn();
 
 vi.mock('../../services/quantAnalysis', () => ({
   getCachedQuantAnalysis: () => null,
   fetchQuantAnalysis: (...args: unknown[]) => fetchQuantAnalysisMock(...args),
+}));
+
+vi.mock('../../services/quantInterpretation', () => ({
+  interpretQuantAnalysis: (...args: unknown[]) => interpretQuantAnalysisMock(...args),
+}));
+
+vi.mock('../../services/SettingsContext', () => ({
+  useSettings: () => ({}),
+}));
+
+vi.mock('../../services/aiProviderConfig', () => ({
+  resolveAiRuntimeConfigByBusiness: () => ({
+    provider: 'customOpenAi',
+    apiKey: 'test-key',
+    model: 'test-model',
+    baseURL: 'https://example.com/v1',
+  }),
 }));
 
 vi.mock('../ModalShell', () => ({
@@ -56,10 +74,12 @@ describe('QuantAnalysisCard', () => {
       ],
       note: '估值不是 PE/PB',
     });
+    interpretQuantAnalysisMock.mockResolvedValue('一、组合结论\n量化结构偏积极。');
   });
 
   afterEach(() => {
     fetchQuantAnalysisMock.mockReset();
+    interpretQuantAnalysisMock.mockReset();
   });
 
   it('opens modal and renders structured quant analysis', async () => {
@@ -72,5 +92,16 @@ describe('QuantAnalysisCard', () => {
     expect(screen.getByText('强势持有')).toBeInTheDocument();
     expect(screen.getByText('测试基金')).toBeInTheDocument();
     expect(screen.getAllByText('夏普 proxy').length).toBeGreaterThan(0);
+  });
+
+  it('generates AI quant interpretation from structured analysis', async () => {
+    render(<QuantAnalysisCard />);
+
+    fireEvent.click(screen.getByRole('button', { name: /量化信号/ }));
+    await waitFor(() => expect(screen.getByText('AI 量化解读')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '生成解读' }));
+
+    await waitFor(() => expect(screen.getByText(/量化结构偏积极/)).toBeInTheDocument());
+    expect(interpretQuantAnalysisMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -817,7 +817,13 @@ interface AnalysisDiagnostics {
   dataQuality: DataQualityDiagnostics;
 }
 
-type ChatCommandKind = 'analysis' | 'profit' | 'intradayProfit' | 'detailedIntradayProfit' | 'quantAnalysis';
+type ChatCommandKind =
+  | 'analysis'
+  | 'profit'
+  | 'intradayProfit'
+  | 'detailedIntradayProfit'
+  | 'quantAnalysis'
+  | 'quantInterpretation';
 
 interface ChatCommandConfig {
   kind: ChatCommandKind;
@@ -956,6 +962,7 @@ const CHAT_COMMANDS: ChatCommandConfig[] = [
   { kind: 'intradayProfit', aliases: ['今日盘中实时收益', '盘中实时收益', '盘中收益', '实时收益'] },
   { kind: 'profit', aliases: ['今日盈利', '今日收益'] },
   { kind: 'quantAnalysis', aliases: ['量化分析', '量化信号', '基金量化'] },
+  { kind: 'quantInterpretation', aliases: ['详细量化', '量化解读'] },
   { kind: 'analysis', aliases: ['分析'], question: SHORT_ANALYSIS_QUESTION, maxLength: 900 },
   { kind: 'analysis', aliases: ['市场分析'], question: MARKET_ANALYSIS_QUESTION, maxLength: 1200, title: '养基AI市场分析' },
   { kind: 'analysis', aliases: ['涨跌'], question: UP_DOWN_REASON_QUESTION, maxLength: 900, title: '养基AI涨跌归因' },
@@ -999,7 +1006,7 @@ const POSITION_ACTION_QUESTIONS = [
   CLEAR_POSITION_QUESTION,
 ];
 const TELEGRAM_HELP_TEXT =
-  '发送“分析”获取短版判断；发送“市场分析”获取市场环境判断；发送“涨跌”获取今天为什么涨/跌和当前信号；发送“预测”获取明日涨跌条件化判断；发送“量化分析”获取客观量化信号；发送“详细分析”获取完整分析；也可发送“建仓”“加仓”“减仓”“清仓”获取专项判断。';
+  '发送“分析”获取短版判断；发送“市场分析”获取市场环境判断；发送“涨跌”获取今天为什么涨/跌和当前信号；发送“预测”获取明日涨跌条件化判断；发送“量化分析”获取客观量化信号；发送“详细量化”获取 AI 量化解读；发送“详细分析”获取完整分析；也可发送“建仓”“加仓”“减仓”“清仓”获取专项判断。';
 const TELEGRAM_ANALYSIS_PENDING_TEXT = '收到，正在结合市场情绪、资金流和持仓分析...';
 const QUANT_SIGNAL_CACHE_TTL_MS = 60 * 60 * 1000;
 const QUANT_NAV_PAGE_SIZE = 20;
@@ -1922,13 +1929,44 @@ const fetchEastMoneyLatestNavForWorker = async (
 const parseEastMoneyHistoricalNavRows = (text: string): FundHistoricalNavPoint[] => {
   const rowRegex =
     /<tr>\s*<td>(\d{4}-\d{2}-\d{2})<\/td>\s*<td[^>]*>([\d.]+)<\/td>\s*<td[^>]*>[\d.]+<\/td>\s*<td[^>]*>[-\d.]+%?<\/td>/g;
-  return Array.from(text.matchAll(rowRegex))
+  const htmlRows = Array.from(text.matchAll(rowRegex))
     .map<FundHistoricalNavPoint | null>((row) => {
       const nav = Number.parseFloat(row[2]);
       if (!Number.isFinite(nav) || nav <= 0) return null;
       return { navDate: row[1], nav };
     })
     .filter((item): item is FundHistoricalNavPoint => Boolean(item));
+  if (htmlRows.length > 0) return htmlRows;
+
+  const plainTextRowRegex = /(\d{4}-\d{2}-\d{2})(\d+\.\d{3,4})/g;
+  return Array.from(text.replace(/<[^>]+>/g, '').matchAll(plainTextRowRegex))
+    .map<FundHistoricalNavPoint | null>((row) => {
+      const nav = Number.parseFloat(row[2]);
+      if (!Number.isFinite(nav) || nav <= 0) return null;
+      return { navDate: row[1], nav };
+    })
+    .filter((item): item is FundHistoricalNavPoint => Boolean(item));
+};
+
+const parseEastMoneyPingzhongdataNavRows = (text: string): FundHistoricalNavPoint[] => {
+  const trendMatch = text.match(/var\s+Data_netWorthTrend\s*=\s*(\[[\s\S]*?\]);/);
+  if (!trendMatch) return [];
+
+  try {
+    const rows = JSON.parse(trendMatch[1]) as Array<{ x?: unknown; y?: unknown }>;
+    return rows
+      .map<FundHistoricalNavPoint | null>((row) => {
+        const timestamp = typeof row.x === 'number' ? row.x : Number(row.x);
+        const nav = typeof row.y === 'number' ? row.y : Number(row.y);
+        if (!Number.isFinite(timestamp) || !Number.isFinite(nav) || nav <= 0) return null;
+        return { navDate: getChinaDateString(new Date(timestamp)), nav };
+      })
+      .filter((item): item is FundHistoricalNavPoint => Boolean(item))
+      .reverse();
+  } catch (error) {
+    console.warn('解析东方财富净值走势失败', error);
+    return [];
+  }
 };
 
 const fetchFundHistoricalNavForQuant = async (fundCode: string): Promise<FundHistoricalNavPoint[]> => {
@@ -1952,6 +1990,20 @@ const fetchFundHistoricalNavForQuant = async (fundCode: string): Promise<FundHis
         navs.push(point);
       });
     }
+
+    if (navs.length >= 21) return navs;
+
+    const trendText = await fetchTextWithTimeout(
+      `https://fund.eastmoney.com/pingzhongdata/${fundCode}.js?v=${Date.now()}`,
+      { headers: { Accept: '*/*' } },
+      `读取基金 ${fundCode} 净值走势`,
+      QUANT_NAV_REQUEST_TIMEOUT_MS,
+    );
+    parseEastMoneyPingzhongdataNavRows(trendText).forEach((point) => {
+      if (seenDates.has(point.navDate) || navs.length >= QUANT_NAV_TARGET_SIZE) return;
+      seenDates.add(point.navDate);
+      navs.push(point);
+    });
 
     return navs;
   } catch (error) {
@@ -5844,6 +5896,46 @@ const buildQuantAnalysisMessage = async (env: Env) => {
   return buildQuantAnalysisMessageFromResult(await buildQuantAnalysisResult(env));
 };
 
+const buildQuantInterpretationPrompt = (result: QuantAnalysisResult) => `你是一位基金组合量化分析解释助手。
+
+要求：
+1) 只能解释“量化结构化数据”中的字段，不得新增、不猜测、不修正任何数值。
+2) 缺失字段必须说明“缺失”，不能补全。
+3) 估值只能表述为“历史净值位置 proxy”，不得说成真实 PE/PB、便宜或昂贵。
+4) 不得写“必涨”“必跌”“一定”，不得做确定性预测。
+5) 操作表达只能是条件化倾向，例如“继续持有观察”“谨慎追涨”“等待回撤确认”“降低单一主题暴露”。
+6) 不推荐未出现在数据里的基金、股票或代码。
+7) 输出适合 Telegram/QQ 阅读，控制在 900 字以内。
+
+请按以下结构输出：
+一、组合结论
+二、量化强项
+三、主要风险
+四、基金分层
+五、操作倾向
+六、数据限制
+
+量化结构化数据：
+${JSON.stringify(result)}`;
+
+const interpretQuantAnalysis = async (env: Env, result: QuantAnalysisResult) => {
+  const question = '请基于量化结构化数据做解释，严格遵守系统要求。';
+  const systemPrompt = buildQuantInterpretationPrompt(result);
+  const endpoint = resolveAiEndpoint(env);
+
+  if (endpoint.provider === 'gemini') {
+    return analyzeWithGemini({ env, systemPrompt, question });
+  }
+
+  return analyzeWithOpenAiCompatible({ env, baseUrl: endpoint.baseUrl, systemPrompt, question });
+};
+
+const buildQuantInterpretationMessage = async (env: Env) => {
+  const result = await buildQuantAnalysisResult(env);
+  const interpretation = await interpretQuantAnalysis(env, result);
+  return ['养基AI详细量化解读', `时间：${new Date(result.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`, '', interpretation].join('\n');
+};
+
 const buildAnalysisMessage = async (
   env: Env,
   options?: { question?: string; maxLength?: number; title?: string },
@@ -6027,6 +6119,22 @@ const handleTelegramWebhook = async (request: Request, env: Env) => {
     }
   }
 
+  if (command.kind === 'quantInterpretation') {
+    const pendingMessages = await sendTelegramMessage(env, TELEGRAM_ANALYSIS_PENDING_TEXT, chatIdStr);
+    try {
+      const quantMessage = await buildQuantInterpretationMessage(env);
+      const sentMessages = await sendTelegramMessage(env, quantMessage, chatIdStr);
+      return json({ ok: true, handled: 'quantInterpretation', sentMessages: pendingMessages + sentMessages });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误';
+      const failureMessages = await sendTelegramMessage(env, `详细量化失败：${message}`, chatIdStr);
+      return json(
+        { ok: false, handled: 'quantInterpretation', error: message, sentMessages: pendingMessages + failureMessages },
+        500,
+      );
+    }
+  }
+
   const pendingMessages = await sendTelegramMessage(env, TELEGRAM_ANALYSIS_PENDING_TEXT, chatIdStr);
   try {
     const analysisMessage = await buildAnalysisMessage(env, command);
@@ -6159,6 +6267,45 @@ const handleQqOfficialWebhook = async (request: Request, env: Env) => {
     }
   }
 
+  if (command.kind === 'quantInterpretation') {
+    const pendingMessages = await sendQqOfficialGroupTextChunks({
+      env,
+      groupOpenid: message.group_openid,
+      text: TELEGRAM_ANALYSIS_PENDING_TEXT,
+      msgId: message.id,
+      startSeq: 1,
+    });
+    try {
+      const quantMessage = await buildQuantInterpretationMessage(env);
+      const sentMessages = await sendQqOfficialGroupTextChunks({
+        env,
+        groupOpenid: message.group_openid,
+        text: quantMessage,
+        msgId: message.id,
+        startSeq: 2,
+      });
+      return json({ ok: true, handled: 'quantInterpretation', sentMessages: pendingMessages + sentMessages });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : '未知错误';
+      const failureMessages = await sendQqOfficialGroupTextChunks({
+        env,
+        groupOpenid: message.group_openid,
+        text: `详细量化失败：${messageText}`,
+        msgId: message.id,
+        startSeq: 2,
+      });
+      return json(
+        {
+          ok: false,
+          handled: 'quantInterpretation',
+          error: messageText,
+          sentMessages: pendingMessages + failureMessages,
+        },
+        500,
+      );
+    }
+  }
+
   const pendingMessages = await sendQqOfficialGroupTextChunks({
     env,
     groupOpenid: message.group_openid,
@@ -6271,6 +6418,27 @@ const handleOneBotWebhook = async (request: Request, env: Env) => {
         {
           ok: false,
           handled: 'quantAnalysis',
+          error: messageText,
+          sentMessages: pendingMessages + failureMessages,
+        },
+        500,
+      );
+    }
+  }
+
+  if (command.kind === 'quantInterpretation') {
+    const pendingMessages = await sendOneBotGroupTextChunks(env, groupId, TELEGRAM_ANALYSIS_PENDING_TEXT);
+    try {
+      const quantMessage = await buildQuantInterpretationMessage(env);
+      const sentMessages = await sendOneBotGroupTextChunks(env, groupId, quantMessage);
+      return json({ ok: true, handled: 'quantInterpretation', sentMessages: pendingMessages + sentMessages });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : '未知错误';
+      const failureMessages = await sendOneBotGroupTextChunks(env, groupId, `详细量化失败：${messageText}`);
+      return json(
+        {
+          ok: false,
+          handled: 'quantInterpretation',
           error: messageText,
           sentMessages: pendingMessages + failureMessages,
         },

@@ -25,7 +25,8 @@ export interface AiRuntimeConfig {
   temperature?: number;
 }
 
-const normalizeOptionalUrl = (value: string): string | undefined => {
+const normalizeOptionalUrl = (value?: string): string | undefined => {
+  if (!value) return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
 };

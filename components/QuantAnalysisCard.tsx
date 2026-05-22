@@ -7,6 +7,9 @@ import {
   type QuantAnalysisResponse,
   type QuantSignal,
 } from '../services/quantAnalysis';
+import { interpretQuantAnalysis } from '../services/quantInterpretation';
+import { useSettings } from '../services/SettingsContext';
+import { resolveAiRuntimeConfigByBusiness } from '../services/aiProviderConfig';
 import { Icons } from './Icon';
 import { ModalShell } from './ModalShell';
 
@@ -74,8 +77,13 @@ const FundMetricRow: React.FC<{ item: QuantAnalysisFundItem }> = ({ item }) => (
 );
 
 export const QuantAnalysisCard: React.FC = () => {
+  const settings = useSettings();
+  const aiRuntime = resolveAiRuntimeConfigByBusiness(settings, 'aiHoldingsAnalysis');
   const [analysis, setAnalysis] = useState<QuantAnalysisResponse | null>(() => getCachedQuantAnalysis());
   const [isLoading, setIsLoading] = useState(false);
+  const [isInterpreting, setIsInterpreting] = useState(false);
+  const [interpretation, setInterpretation] = useState('');
+  const [interpretationError, setInterpretationError] = useState('');
   const [isOpen, setIsOpen] = useState(false);
 
   const loadAnalysis = async (force = false) => {
@@ -89,6 +97,31 @@ export const QuantAnalysisCard: React.FC = () => {
   const openDetails = () => {
     setIsOpen(true);
     if (!analysis) void loadAnalysis(false);
+  };
+
+  const loadInterpretation = async (force = false) => {
+    const current = analysis || (await fetchQuantAnalysis(false));
+    if (!current) {
+      setInterpretationError('量化数据读取失败，暂不能生成 AI 解读。');
+      return;
+    }
+    if (!analysis) setAnalysis(current);
+    if (!aiRuntime.apiKey) {
+      setInterpretationError('请先在设置中填写 AI 接口密钥。');
+      window.dispatchEvent(new CustomEvent('open-ai-settings'));
+      return;
+    }
+
+    setIsInterpreting(true);
+    setInterpretationError('');
+    try {
+      const text = await interpretQuantAnalysis(current, aiRuntime, { force });
+      setInterpretation(text);
+    } catch {
+      setInterpretationError('AI 量化解读失败，请稍后重试。');
+    } finally {
+      setIsInterpreting(false);
+    }
   };
 
   return (
@@ -157,6 +190,32 @@ export const QuantAnalysisCard: React.FC = () => {
             >
               {isLoading ? '刷新中' : '刷新'}
             </button>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-[var(--app-shell-line)] bg-[var(--app-shell-panel-strong)] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-800 dark:text-gray-100">AI 量化解读</div>
+                <div className="mt-1 text-xs text-slate-500 dark:text-gray-400">
+                  只解释当前量化 JSON，不生成新数据。
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadInterpretation(Boolean(interpretation))}
+                className="shrink-0 rounded-full border border-[var(--app-shell-line)] px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:bg-white/70 dark:text-gray-300 dark:hover:bg-white/10"
+              >
+                {isInterpreting ? '解读中' : interpretation ? '重新解读' : '生成解读'}
+              </button>
+            </div>
+            {interpretationError ? (
+              <p className="mt-3 text-xs leading-5 text-rose-500">{interpretationError}</p>
+            ) : null}
+            {interpretation ? (
+              <div className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700 dark:text-gray-200">
+                {interpretation}
+              </div>
+            ) : null}
           </div>
 
           {portfolio ? (
