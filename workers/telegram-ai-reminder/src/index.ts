@@ -253,6 +253,12 @@ interface FundProfileSnapshot {
   note: string;
 }
 
+interface FundProfileCacheEntry {
+  code: string;
+  cachedAt: string;
+  profile: FundProfileSnapshot;
+}
+
 interface QuantThresholdProfile {
   strong: number;
   weak: number;
@@ -274,6 +280,8 @@ interface FundHoldingsEnrichmentSnapshot {
 interface SnapshotBuildOptions {
   holdingsTimeoutMs?: number;
   quantMode?: 'cachedOnly' | 'full';
+  fundProfileCache?: Record<string, FundProfileCacheEntry>;
+  fundProfileCacheUpdates?: Record<string, FundProfileCacheEntry>;
 }
 
 interface IntradayProfitFundSnapshot {
@@ -621,6 +629,7 @@ interface AnalysisStatePayload {
   updatedAt: string;
   fundFlowHistory: FundFlowHistoryEntry[];
   predictionRecords: PredictionRecord[];
+  fundProfiles: Record<string, FundProfileCacheEntry>;
 }
 
 interface MarketBreadthSnapshot {
@@ -837,6 +846,7 @@ const DEFAULT_FUND_HOLDINGS_TIMEOUT_MS = 5000;
 const DEFAULT_FUND_PROFILE_TIMEOUT_MS = 3500;
 const FAST_ANALYSIS_FUND_HOLDINGS_TIMEOUT_MS = 3000;
 const FUND_HOLDINGS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const FUND_PROFILE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_FUND_FLOW_HISTORY_ENTRIES = 30;
 const MAX_PREDICTION_RECORDS = 60;
 const DEFAULT_AI_QUESTION =
@@ -1560,7 +1570,31 @@ const createEmptyAnalysisState = (): AnalysisStatePayload => ({
   updatedAt: new Date().toISOString(),
   fundFlowHistory: [],
   predictionRecords: [],
+  fundProfiles: {},
 });
+
+const isFundProfileSnapshot = (value: unknown): value is FundProfileSnapshot => {
+  if (!isNonEmptyObject(value)) return false;
+  return (
+    (value.status === 'available' || value.status === 'missing' || value.status === 'failed') &&
+    value.source === 'eastmoney-page' &&
+    typeof value.note === 'string'
+  );
+};
+
+const normalizeFundProfileCache = (value: unknown): Record<string, FundProfileCacheEntry> => {
+  if (!isNonEmptyObject(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([code, entry]) => {
+        if (!/^\d{6}$/.test(code) || !isNonEmptyObject(entry)) return null;
+        if (entry.code !== code || typeof entry.cachedAt !== 'string') return null;
+        if (!isFundProfileSnapshot(entry.profile)) return null;
+        return [code, entry as unknown as FundProfileCacheEntry] as const;
+      })
+      .filter((entry): entry is readonly [string, FundProfileCacheEntry] => Boolean(entry)),
+  );
+};
 
 const readGistAnalysisState = async (env: Env): Promise<AnalysisStatePayload> => {
   try {
@@ -1587,6 +1621,7 @@ const readGistAnalysisState = async (env: Env): Promise<AnalysisStatePayload> =>
       updatedAt: parsed.updatedAt || new Date().toISOString(),
       fundFlowHistory: Array.isArray(parsed.fundFlowHistory) ? parsed.fundFlowHistory : [],
       predictionRecords: Array.isArray(parsed.predictionRecords) ? parsed.predictionRecords : [],
+      fundProfiles: normalizeFundProfileCache(parsed.fundProfiles),
     };
   } catch (error) {
     console.warn('读取 AI 分析状态失败，使用空状态降级', error);
@@ -1743,6 +1778,47 @@ const fetchFundProfile = async (
       note: '东方财富基金页请求失败，画像字段暂不可用。',
     };
   }
+};
+
+const isFreshFundProfileCache = (entry: FundProfileCacheEntry, now = Date.now()) => {
+  const cachedAt = Date.parse(entry.cachedAt);
+  return Number.isFinite(cachedAt) && now - cachedAt <= FUND_PROFILE_CACHE_TTL_MS;
+};
+
+const withCachedFundProfileNote = (entry: FundProfileCacheEntry): FundProfileSnapshot => ({
+  ...entry.profile,
+  note: `使用 ${entry.cachedAt.slice(0, 10)} 缓存画像；${entry.profile.note}`,
+});
+
+const fetchFundProfileWithCache = async (
+  fundCode: string,
+  cache?: Record<string, FundProfileCacheEntry>,
+  updates?: Record<string, FundProfileCacheEntry>,
+): Promise<FundProfileSnapshot> => {
+  const cached = cache?.[fundCode];
+  if (cached && isFreshFundProfileCache(cached)) {
+    return withCachedFundProfileNote(cached);
+  }
+
+  const profile = await fetchFundProfile(fundCode);
+  if (profile.status === 'available') {
+    const entry: FundProfileCacheEntry = {
+      code: fundCode,
+      cachedAt: new Date().toISOString(),
+      profile,
+    };
+    if (updates) updates[fundCode] = entry;
+    return profile;
+  }
+
+  if (cached?.profile.status === 'available') {
+    return {
+      ...withCachedFundProfileNote(cached),
+      note: `画像刷新失败，沿用旧缓存；${cached.profile.note}`,
+    };
+  }
+
+  return profile;
 };
 
 const getChinaDateString = (date = new Date()) => {
@@ -3338,7 +3414,14 @@ const buildHoldingsSnapshot = async (
     validFunds.map(async (fund) => [fund.code, await fetchFundHoldingsEnrichment(fund.code, holdingsTimeoutMs)] as const),
   );
   const profiles = await Promise.all(
-    validFunds.map(async (fund) => [fund.code, await fetchFundProfile(fund.code)] as const),
+    validFunds.map(async (fund) => [
+      fund.code,
+      await fetchFundProfileWithCache(
+        fund.code,
+        options?.fundProfileCache,
+        options?.fundProfileCacheUpdates,
+      ),
+    ] as const),
   );
   const quantSignals = await Promise.all(
     validFunds.map(async (fund) => {
@@ -3628,6 +3711,21 @@ const buildMarketStructureSummary = (marketSnapshot: MarketSnapshot | undefined)
     midSmallCapChangePct,
     styleBias,
     reason: `指数样本 ${indices.length} 个，上涨 ${positiveCount} 个、下跌 ${negativeCount} 个，均值 ${formatPublicChangePct(averageChangePct)}，${styleBias}。`,
+  };
+};
+
+const updateFundProfileCache = (
+  state: AnalysisStatePayload,
+  updates: Record<string, FundProfileCacheEntry>,
+): AnalysisStatePayload => {
+  if (Object.keys(updates).length === 0) return state;
+  return {
+    ...state,
+    updatedAt: new Date().toISOString(),
+    fundProfiles: {
+      ...state.fundProfiles,
+      ...updates,
+    },
   };
 };
 
@@ -5564,6 +5662,8 @@ const buildAnalysisMessage = async (
   const startedAt = Date.now();
   const payload = await readGistBackup(env);
   logStepDuration('读取 Gist', startedAt);
+  const persistedAnalysisState = await readGistAnalysisState(env);
+  const fundProfileCacheUpdates: Record<string, FundProfileCacheEntry> = {};
 
   const isShortAnalysis =
     options?.question === SHORT_ANALYSIS_QUESTION ||
@@ -5574,6 +5674,8 @@ const buildAnalysisMessage = async (
   const snapshot = await buildHoldingsSnapshot(payload, {
     holdingsTimeoutMs: isShortAnalysis ? FAST_ANALYSIS_FUND_HOLDINGS_TIMEOUT_MS : DEFAULT_FUND_HOLDINGS_TIMEOUT_MS,
     quantMode: isShortAnalysis ? 'cachedOnly' : 'full',
+    fundProfileCache: persistedAnalysisState.fundProfiles,
+    fundProfileCacheUpdates,
   });
   logStepDuration('构建持仓快照', snapshotStartedAt);
 
@@ -5596,9 +5698,11 @@ const buildAnalysisMessage = async (
     fetchEtfDirectionProxySnapshot(),
   ]);
   logStepDuration('读取市场/新闻/资金流', externalStartedAt);
-  const persistedAnalysisState = await readGistAnalysisState(env);
   const evaluatedAnalysisState = evaluatePredictionRecords(persistedAnalysisState, payload.fundDailyEarnings);
-  const analysisState = updateFundFlowHistory(evaluatedAnalysisState, fundFlowSnapshot);
+  const analysisState = updateFundProfileCache(
+    updateFundFlowHistory(evaluatedAnalysisState, fundFlowSnapshot),
+    fundProfileCacheUpdates,
+  );
   const fundFlowHistorySummary = buildFundFlowHistorySummary(analysisState);
   const predictionRecordsSummary = buildPredictionRecordsSummary(analysisState);
   const heldFundCodeSet = new Set(snapshot.heldFundCodes);

@@ -621,6 +621,16 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('基金画像数据: 1/1');
     expect(aiBody.messages[0].content).toContain('基金画像摘要: 测试基金A');
     expect(aiBody.messages[0].content).toContain('混合型-灵活');
+    const statePatchCall = fetchMock.mock.calls.find(
+      (call) => String(call[0]).includes('api.github.com/gists') && call[1]?.method === 'PATCH',
+    );
+    const statePatchBody = JSON.parse(statePatchCall?.[1].body as string) as {
+      files: Record<string, { content: string }>;
+    };
+    const statePayload = JSON.parse(statePatchBody.files['fund-manager-ai-state.json'].content) as {
+      fundProfiles: Record<string, { profile: { fundType?: string } }>;
+    };
+    expect(statePayload.fundProfiles['000001']?.profile.fundType).toBe('混合型-灵活');
     expect(aiBody.messages[0].content).toContain('今日加仓候选');
     expect(aiBody.messages[0].content).toContain('不得编造新闻标题、财报数据、公告内容或资金流数据');
     expect(aiBody.messages[0].content).toContain('不要编造不存在的数据');
@@ -1237,6 +1247,78 @@ describe('telegram ai reminder worker', () => {
     expect(telegramBody.text).toContain('养基AI明日涨跌预测');
     const aiBody = findAiRequestBody(fetchMock);
     expect(aiBody.messages[1].content).toContain('明日涨跌预测');
+  });
+
+  it('基金画像缓存未过期时不重复请求天天基金页面', async () => {
+    const existingState = {
+      version: 1,
+      updatedAt: '2026-05-18T10:00:00.000Z',
+      fundFlowHistory: [],
+      predictionRecords: [],
+      fundProfiles: {
+        '000001': {
+          code: '000001',
+          cachedAt: new Date().toISOString(),
+          profile: {
+            status: 'available',
+            source: 'eastmoney-page',
+            fundType: '股票型',
+            riskLevel: '高风险',
+            scaleText: '12.34亿元',
+            scaleDate: '2026-03-31',
+            managerText: '缓存经理',
+            note: '缓存测试',
+          },
+        },
+      },
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: {
+              'fund-manager-sync.json': { content: JSON.stringify(backupPayload) },
+              'fund-manager-ai-state.json': { content: JSON.stringify(existingState) },
+            },
+          }),
+        );
+      }
+      if (url.includes('fund.eastmoney.com/000001.html')) {
+        throw new Error('fund profile page should not be fetched');
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('query1.finance.yahoo.com')) return Promise.resolve(jsonResponse(yahooChartPayload));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+        if (url.includes('f37') || url.includes('f38')) return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
+        return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
+      }
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('chat/completions')) {
+        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '缓存画像分析' } }] }));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '详细分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fund.eastmoney.com/000001.html'))).toBe(false);
+    const aiBody = findAiRequestBody(fetchMock);
+    expect(aiBody.messages[0].content).toContain('股票型');
+    expect(aiBody.messages[0].content).toContain('缓存经理');
   });
 
   it('会用每日收益结算历史预测并写入命中率', async () => {
