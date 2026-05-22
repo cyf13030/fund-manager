@@ -1092,6 +1092,8 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('不推荐具体基金名称或基金代码');
     expect(aiBody.messages[0].content).toContain('市场分析专用摘要');
     expect(aiBody.messages[0].content).toContain('portfolioRelevance');
+    expect(aiBody.messages[0].content).toContain('analysisDiagnostics');
+    expect(aiBody.messages[0].content).toContain('dataQuality');
     expect(aiBody.messages[0].content).not.toContain('buildCandidates');
     expect(aiBody.messages[1].content).not.toContain('简短但全面');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
@@ -1120,6 +1122,7 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('不能只复述数据');
     expect(aiBody.messages[0].content).toContain('今日涨跌归因摘要');
     expect(aiBody.messages[0].content).toContain('marketFit');
+    expect(aiBody.messages[0].content).toContain('analysisDiagnostics');
     expect(aiBody.messages[0].content).not.toContain('buildCandidates');
     expect(aiBody.messages[1].content).not.toContain('简短但全面');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
@@ -1156,6 +1159,7 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('fundFlow');
     expect(aiBody.messages[0].content).toContain('marketStructure');
     expect(aiBody.messages[0].content).toContain('marketFit');
+    expect(aiBody.messages[0].content).toContain('analysisDiagnostics');
     expect(aiBody.messages[0].content).toContain('持仓匹配度必须区分');
     expect(aiBody.messages[0].content).toContain('transactionSettlement');
     expect(aiBody.messages[0].content).toContain('待确认买入不能算当前已确认持仓收益');
@@ -1368,6 +1372,7 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('1000 字以内');
     expect(aiBody.messages[0].content).toContain('专项操作摘要');
     expect(aiBody.messages[0].content).toContain('action');
+    expect(aiBody.messages[0].content).toContain('analysisDiagnostics');
     expect(aiBody.messages[0].content).not.toContain('buildCandidates');
   });
 

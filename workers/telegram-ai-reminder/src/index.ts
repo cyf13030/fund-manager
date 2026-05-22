@@ -572,6 +572,51 @@ interface PortfolioMarketFitSummary {
   reason: string;
 }
 
+interface HoldingsCoverageDiagnostics {
+  fundCount: number;
+  topHoldingsAvailableCount: number;
+  sectorAvailableCount: number;
+  topHoldingsCoveragePct: number;
+  sectorCoveragePct: number;
+  weakExposureCount: number;
+  weakExposurePct: number;
+  weakExposurePortfolioPct: number;
+  notes: string[];
+  funds: Array<{
+    code: string;
+    name: string;
+    status: 'available' | 'missing' | 'failed';
+    portfolioDate?: string;
+    topHoldingCount: number;
+    sectorHoldingCount: number;
+    hasWeakExposure: boolean;
+  }>;
+}
+
+interface PortfolioMarketFitDetail {
+  theme: string;
+  portfolioPct: number;
+  matchedMarketTheme: string;
+  source: UnderlyingExposureItem['source'];
+  sourceLabel: string;
+  representativeHoldings: string[];
+  confidence: 'strong' | 'weak';
+}
+
+interface DataQualityDiagnostics {
+  score: number;
+  level: '高' | '中' | '低';
+  missingItems: string[];
+  partialItems: string[];
+  notes: string[];
+}
+
+interface AnalysisDiagnostics {
+  holdingsCoverage: HoldingsCoverageDiagnostics;
+  portfolioMarketFitDetails: PortfolioMarketFitDetail[];
+  dataQuality: DataQualityDiagnostics;
+}
+
 type ChatCommandKind = 'analysis' | 'profit' | 'intradayProfit' | 'detailedIntradayProfit' | 'quantAnalysis';
 
 interface ChatCommandConfig {
@@ -3169,6 +3214,130 @@ const buildPortfolioMarketFitSummary = (
   return { level, score, matchedThemes, reason };
 };
 
+const buildHoldingsCoverageDiagnostics = (holdings: HoldingsSnapshot): HoldingsCoverageDiagnostics => {
+  const fundCount = holdings.holdings.length;
+  const topHoldingsAvailableCount = holdings.holdings.filter((fund) => fund.topEquityHoldings?.length).length;
+  const sectorAvailableCount = holdings.holdings.filter((fund) =>
+    fund.topEquityHoldings?.some((equity) => equity.sector?.trim()),
+  ).length;
+  const weakExposures = holdings.underlyingExposures.filter((item) => item.source !== 'sector');
+  const weakExposurePortfolioPct = round(weakExposures.reduce((sum, item) => sum + item.portfolioPct, 0));
+  const topHoldingsCoveragePct = fundCount > 0 ? round((topHoldingsAvailableCount / fundCount) * 100) : 0;
+  const sectorCoveragePct = fundCount > 0 ? round((sectorAvailableCount / fundCount) * 100) : 0;
+  const weakExposurePct = holdings.underlyingExposures.length > 0 ? round((weakExposures.length / holdings.underlyingExposures.length) * 100) : 0;
+  const notes = [
+    `前十大持仓覆盖 ${topHoldingsCoveragePct}%（${topHoldingsAvailableCount}/${fundCount} 只基金）`,
+    `行业字段覆盖 ${sectorCoveragePct}%（${sectorAvailableCount}/${fundCount} 只基金）`,
+  ];
+  if (weakExposures.length > 0) {
+    notes.push(`弱匹配主题 ${weakExposures.length} 个，约 ${weakExposurePortfolioPct}% 组合暴露来自关键词推断`);
+  }
+  if (topHoldingsAvailableCount === 0 && fundCount > 0) notes.push('所有持仓基金均未成功获取前十大持仓');
+  if (sectorAvailableCount === 0 && topHoldingsAvailableCount > 0) notes.push('已获取前十大持仓，但行业字段缺失');
+
+  return {
+    fundCount,
+    topHoldingsAvailableCount,
+    sectorAvailableCount,
+    topHoldingsCoveragePct,
+    sectorCoveragePct,
+    weakExposureCount: weakExposures.length,
+    weakExposurePct,
+    weakExposurePortfolioPct,
+    notes,
+    funds: holdings.holdings.map((fund) => ({
+      code: fund.code,
+      name: fund.name,
+      status: fund.holdingsDataStatus ?? 'missing',
+      portfolioDate: fund.holdingsDataDate,
+      topHoldingCount: fund.topEquityHoldings?.length ?? 0,
+      sectorHoldingCount: fund.topEquityHoldings?.filter((equity) => equity.sector?.trim()).length ?? 0,
+      hasWeakExposure: holdings.underlyingExposures.some(
+        (exposure) => exposure.source !== 'sector' && exposure.topHoldings.some((holding) => holding.funds.includes(fund.name)),
+      ),
+    })),
+  };
+};
+
+const buildPortfolioMarketFitDetails = (
+  holdings: HoldingsSnapshot,
+  portfolioMarketFit: PortfolioMarketFitSummary,
+): PortfolioMarketFitDetail[] => {
+  return portfolioMarketFit.matchedThemes.slice(0, 8).map((match) => {
+    const exposure = holdings.underlyingExposures.find((item) => item.theme === match.theme);
+    const sourceLabel =
+      match.source === 'sector'
+        ? '真实行业字段'
+        : match.source === 'equityKeyword'
+          ? '重仓股关键词弱匹配'
+          : '基金名称关键词弱匹配';
+    return {
+      theme: match.theme,
+      portfolioPct: match.portfolioPct,
+      matchedMarketTheme: match.matchedMarketTheme,
+      source: match.source,
+      sourceLabel,
+      representativeHoldings: exposure?.topHoldings.slice(0, 3).map((holding) => holding.name) ?? [],
+      confidence: match.source === 'sector' ? 'strong' : 'weak',
+    };
+  });
+};
+
+const buildDataQualityDiagnostics = (context: AnalysisContextSnapshot): DataQualityDiagnostics => {
+  const { holdings, marketSnapshot, overseasMarketSnapshot, newsSnapshot, fundFlowSnapshot, marketBreadthSnapshot } = context;
+  const missingItems: string[] = [];
+  const partialItems: string[] = [];
+  let score = 100;
+  const penalize = (label: string, amount: number, target: 'missing' | 'partial') => {
+    score -= amount;
+    if (target === 'missing') missingItems.push(label);
+    else partialItems.push(label);
+  };
+
+  if (!marketSnapshot || marketSnapshot.dataStatus === 'missing') penalize('A股指数', 15, 'missing');
+  else if (marketSnapshot.dataStatus === 'partial') penalize('A股指数', 6, 'partial');
+  if (!overseasMarketSnapshot || overseasMarketSnapshot.dataStatus === 'missing') penalize('外围市场', 8, 'missing');
+  else if (overseasMarketSnapshot.dataStatus === 'partial') penalize('外围市场', 4, 'partial');
+  if (!newsSnapshot || newsSnapshot.dataStatus === 'failed') penalize('消息面', 12, 'missing');
+  else if (newsSnapshot.dataStatus === 'missing') penalize('消息面', 8, 'missing');
+  if (!fundFlowSnapshot || fundFlowSnapshot.dataStatus === 'failed') penalize('资金流', 18, 'missing');
+  else if (fundFlowSnapshot.dataStatus === 'missing') penalize('资金流', 12, 'missing');
+  else if (fundFlowSnapshot.dataStatus === 'partial') penalize('资金流', 6, 'partial');
+  if (!marketBreadthSnapshot || marketBreadthSnapshot.dataStatus === 'failed') penalize('市场宽度', 8, 'missing');
+  else if (marketBreadthSnapshot.dataStatus === 'missing') penalize('市场宽度', 6, 'missing');
+  if (holdings.dataCoverage.topEquityHoldings === 'missing') penalize('底层持仓', 18, 'missing');
+  else if (holdings.dataCoverage.topEquityHoldings === 'partial') penalize('底层持仓', 8, 'partial');
+  if (holdings.dataCoverage.industryDistribution === 'missing') penalize('行业字段', 12, 'missing');
+  else if (holdings.dataCoverage.industryDistribution === 'partial') penalize('行业字段', 6, 'partial');
+  const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
+  if (quantSummary.status === 'missing') penalize('量化信号', 10, 'missing');
+  else if (quantSummary.status === 'partial') penalize('量化信号', 5, 'partial');
+  if (holdings.transactionSettlement.pendingCount > 0) penalize('交易确认状态', 4, 'partial');
+
+  const normalizedScore = Math.max(0, round(score));
+  const level = normalizedScore >= 80 ? '高' : normalizedScore >= 60 ? '中' : '低';
+  return {
+    score: normalizedScore,
+    level,
+    missingItems,
+    partialItems,
+    notes: [
+      `数据质量 ${normalizedScore}/100（${level}）`,
+      missingItems.length > 0 ? `缺失项：${missingItems.join('、')}` : '关键数据无完全缺失项',
+      partialItems.length > 0 ? `不完整项：${partialItems.join('、')}` : '关键数据无明显不完整项',
+    ],
+  };
+};
+
+const buildAnalysisDiagnostics = (context: AnalysisContextSnapshot): AnalysisDiagnostics => {
+  const portfolioMarketFit = buildPortfolioMarketFitSummary(context.holdings, context.fundFlowSnapshot);
+  return {
+    holdingsCoverage: buildHoldingsCoverageDiagnostics(context.holdings),
+    portfolioMarketFitDetails: buildPortfolioMarketFitDetails(context.holdings, portfolioMarketFit),
+    dataQuality: buildDataQualityDiagnostics(context),
+  };
+};
+
 const normalizePortfolioNewsText = (value: string | undefined) => (value || '').toLowerCase();
 
 const findPortfolioNewsRelation = (item: NewsItemSnapshot, keywords: PortfolioNewsKeyword[]) => {
@@ -3742,6 +3911,7 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
   } = context;
   const marketPhase = getChinaMarketPhase();
   const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
+  const analysisDiagnostics = buildAnalysisDiagnostics(context);
   const topExposures = holdings.underlyingExposures.slice(0, 8);
   const topHoldings = [...holdings.holdings]
     .sort((a, b) => b.marketValue - a.marketValue)
@@ -3808,6 +3978,7 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
       equityOverlapCount: holdings.equityOverlap.length,
       marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
     },
+    analysisDiagnostics,
   };
 
   const roleInstruction =
@@ -3847,6 +4018,7 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
   } = context;
   const marketPhase = getChinaMarketPhase();
   const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
+  const analysisDiagnostics = buildAnalysisDiagnostics(context);
   const topHoldings = [...holdings.holdings]
     .sort((a, b) => Math.abs(b.dayChangeVal) - Math.abs(a.dayChangeVal))
     .slice(0, 8)
@@ -3906,6 +4078,7 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
       etfDirectionProxy: etfDirectionProxySnapshot ?? null,
     },
     marketStructure: buildMarketStructureSummary(marketSnapshot),
+    analysisDiagnostics,
   };
 
   const roleInstruction =
@@ -3940,6 +4113,7 @@ const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: strin
     etfDirectionProxySnapshot,
   } = context;
   const marketPhase = getChinaMarketPhase();
+  const analysisDiagnostics = buildAnalysisDiagnostics(context);
   const marketContext = {
     marketPhase,
     aShareMarket: {
@@ -3979,6 +4153,7 @@ const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: strin
       marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
       dataCoverage: holdings.dataCoverage,
     },
+    analysisDiagnostics,
   };
 
   const roleInstruction =
@@ -4012,6 +4187,7 @@ const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: s
   const { holdings, marketSnapshot, newsSnapshot, fundFlowSnapshot, marketBreadthSnapshot } = context;
   const action = resolvePositionActionLabel(question);
   const quantSummary = buildPortfolioQuantSummary(holdings.holdings, holdings.totalAssets);
+  const analysisDiagnostics = buildAnalysisDiagnostics(context);
   const sortedFunds = [...holdings.holdings]
     .sort((a, b) => b.marketValue - a.marketValue)
     .slice(0, 10)
@@ -4064,6 +4240,7 @@ const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: s
       topItems: fundFlowSnapshot?.items.slice(0, 8) ?? [],
       rotation: buildMarketRotationSnapshot(fundFlowSnapshot),
     },
+    analysisDiagnostics,
   };
   const actionRules =
     action === '加仓'
@@ -4118,6 +4295,7 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
   const marketStructure = buildMarketStructureSummary(marketSnapshot);
   const portfolioMarketFit = buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot);
   const marketRotation = buildMarketRotationSnapshot(fundFlowSnapshot);
+  const analysisDiagnostics = buildAnalysisDiagnostics(context);
 
   const modeInstruction =
     mode === 'risk'
@@ -4157,6 +4335,12 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
     holdings.underlyingExposures[0]
       ? `底层最大暴露: ${holdings.underlyingExposures[0].theme} (${holdings.underlyingExposures[0].portfolioPct}%)`
       : '',
+    `数据质量评分: ${analysisDiagnostics.dataQuality.score}/100 (${analysisDiagnostics.dataQuality.level})`,
+    `数据质量缺失项: ${analysisDiagnostics.dataQuality.missingItems.join('、') || '无'}`,
+    `底层持仓覆盖率: ${analysisDiagnostics.holdingsCoverage.topHoldingsCoveragePct}%`,
+    `行业字段覆盖率: ${analysisDiagnostics.holdingsCoverage.sectorCoveragePct}%`,
+    `弱匹配主题占比: ${analysisDiagnostics.holdingsCoverage.weakExposurePct}%`,
+    `弱匹配组合暴露: ${analysisDiagnostics.holdingsCoverage.weakExposurePortfolioPct}%`,
     `量化信号数据: ${quantSummary.status}`,
     `量化信号覆盖: ${quantSummary.availableCount}/${quantSummary.totalCount}`,
     `组合量化评分: ${quantSummary.score}`,
@@ -4188,6 +4372,15 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
           .map((item) => `${item.theme}->${item.matchedMarketTheme}(${item.portfolioPct}%, ${item.source})`)
           .join('、')}`
       : '匹配的持仓主题: missing',
+    analysisDiagnostics.portfolioMarketFitDetails.length > 0
+      ? `持仓匹配明细: ${analysisDiagnostics.portfolioMarketFitDetails
+          .slice(0, 5)
+          .map(
+            (item) =>
+              `${item.theme}->${item.matchedMarketTheme}(${item.portfolioPct}%, ${item.sourceLabel}, 代表:${item.representativeHoldings.join('/') || '无'})`,
+          )
+          .join('、')}`
+      : '持仓匹配明细: missing',
     `外围市场/指数期货数据: ${overseasMarketSnapshot?.dataStatus ?? 'missing'}`,
     overseasMarketSnapshot?.items[0]
       ? `外围市场代表信号: ${overseasMarketSnapshot.items
