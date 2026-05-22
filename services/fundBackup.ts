@@ -1,6 +1,7 @@
 import type { Account, Fund, WatchlistItem, InvestmentPlan } from '../types';
 import type { InvestmentProfileSnapshot } from './aiAnalysis';
 import type { FundDailyEarningsPoint, FundDailyEarningsStore } from './fundDailyEarnings';
+import type { FundValuationSeriesPoint, FundValuationStore } from './fundValuationTimeseries';
 
 export interface FundBackupPayload {
   version: number;
@@ -14,6 +15,8 @@ export interface FundBackupPayload {
   availableAssets?: number;
   /** 单基金每日收益归档，用于跨设备恢复收益回看与 Worker 归因 */
   fundDailyEarnings?: FundDailyEarningsStore;
+  /** 单基金盘中估值序列，用于估值误差回测 */
+  fundValuationTimeseries?: FundValuationStore;
 }
 
 const BACKUP_VERSION = 1;
@@ -167,6 +170,39 @@ const normalizeFundDailyEarningsStore = (value: unknown): FundDailyEarningsStore
   );
 };
 
+const isValidFundValuationSeriesPoint = (value: unknown): value is FundValuationSeriesPoint => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.date === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value.date) &&
+    typeof value.time === 'string' &&
+    /^\d{2}:\d{2}$/.test(value.time) &&
+    typeof value.estimatedNav === 'number' &&
+    Number.isFinite(value.estimatedNav) &&
+    value.estimatedNav > 0
+  );
+};
+
+const normalizeFundValuationStore = (value: unknown): FundValuationStore | undefined => {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('无效的备份文件格式');
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([code, points]) => [
+        code,
+        Array.isArray(points)
+          ? points
+              .filter(isValidFundValuationSeriesPoint)
+              .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
+          : [],
+      ] as const)
+      .filter(([code, points]) => /^\d{6}$/.test(code) && points.length > 0),
+  );
+};
+
 export const buildFundBackupKey = (fund: Pick<Fund, 'code' | 'platform'>): string => {
   return `${fund.code}_${fund.platform}`;
 };
@@ -202,6 +238,7 @@ export const buildFundBackupPayload = (
   investmentProfile?: InvestmentProfileSnapshot,
   availableAssets?: number,
   fundDailyEarnings?: FundDailyEarningsStore,
+  fundValuationTimeseries?: FundValuationStore,
 ): FundBackupPayload => {
   return {
     version: BACKUP_VERSION,
@@ -214,6 +251,9 @@ export const buildFundBackupPayload = (
     ...(availableAssets !== undefined ? { availableAssets } : {}),
     ...(fundDailyEarnings && Object.keys(fundDailyEarnings).length > 0
       ? { fundDailyEarnings: normalizeFundDailyEarningsStore(fundDailyEarnings) }
+      : {}),
+    ...(fundValuationTimeseries && Object.keys(fundValuationTimeseries).length > 0
+      ? { fundValuationTimeseries: normalizeFundValuationStore(fundValuationTimeseries) }
       : {}),
   };
 };
@@ -228,6 +268,7 @@ export const parseAndNormalizeFundBackupPayload = (
   investmentProfile?: InvestmentProfileSnapshot;
   availableAssets?: number;
   fundDailyEarnings?: FundDailyEarningsStore;
+  fundValuationTimeseries?: FundValuationStore;
 } => {
   const parsed =
     typeof content === 'string' ? (JSON.parse(content) as Partial<FundBackupPayload>) : content;
@@ -306,6 +347,7 @@ export const parseAndNormalizeFundBackupPayload = (
       ? payload.availableAssets
       : undefined;
   const fundDailyEarnings = normalizeFundDailyEarningsStore(payload.fundDailyEarnings);
+  const fundValuationTimeseries = normalizeFundValuationStore(payload.fundValuationTimeseries);
 
   return {
     funds: normalizedFunds,
@@ -335,6 +377,7 @@ export const parseAndNormalizeFundBackupPayload = (
         : undefined,
     availableAssets: parsedAvailableAssets,
     fundDailyEarnings,
+    fundValuationTimeseries,
   };
 };
 

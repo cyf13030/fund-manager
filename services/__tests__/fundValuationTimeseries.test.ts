@@ -2,7 +2,9 @@ import {
   clearFundValuationSeries,
   getAllFundValuationSeries,
   getFundValuationSeries,
+  mergeFundValuationSeries,
   recordFundValuationSeries,
+  replaceAllFundValuationSeries,
 } from '../fundValuationTimeseries';
 
 describe('fundValuationTimeseries', () => {
@@ -52,6 +54,28 @@ describe('fundValuationTimeseries', () => {
     expect(Object.keys(getAllFundValuationSeries()).sort()).toEqual(['000001', '000002']);
     clearFundValuationSeries('000001');
     expect(getAllFundValuationSeries()).toEqual({
+      '000002': [{ date: '2026-05-20', time: '09:31', estimatedNav: 2.1 }],
+    });
+  });
+
+  it('支持全量替换和合并导入的估值序列', () => {
+    replaceAllFundValuationSeries({
+      '000001': [{ date: '2026-05-20', time: '09:31', estimatedNav: 1.1 }],
+    });
+
+    mergeFundValuationSeries({
+      '000001': [
+        { date: '2026-05-20', time: '09:31', estimatedNav: 1.2 },
+        { date: '2026-05-20', time: '09:32', estimatedNav: 1.3 },
+      ],
+      '000002': [{ date: '2026-05-20', time: '09:31', estimatedNav: 2.1 }],
+    });
+
+    expect(getAllFundValuationSeries()).toEqual({
+      '000001': [
+        { date: '2026-05-20', time: '09:31', estimatedNav: 1.2 },
+        { date: '2026-05-20', time: '09:32', estimatedNav: 1.3 },
+      ],
       '000002': [{ date: '2026-05-20', time: '09:31', estimatedNav: 2.1 }],
     });
   });

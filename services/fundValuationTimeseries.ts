@@ -6,7 +6,7 @@ export interface FundValuationSeriesPoint {
   estimatedNav: number;
 }
 
-type FundValuationStore = Record<string, FundValuationSeriesPoint[]>;
+export type FundValuationStore = Record<string, FundValuationSeriesPoint[]>;
 
 const STORAGE_KEY = 'fundManager.fundValuationTimeseries';
 
@@ -109,6 +109,24 @@ export const getFundValuationSeries = (code: string): FundValuationSeriesPoint[]
 };
 
 export const getAllFundValuationSeries = (): FundValuationStore => readStore();
+
+export const replaceAllFundValuationSeries = (store: FundValuationStore): void => {
+  writeStore(store);
+};
+
+export const mergeFundValuationSeries = (store: FundValuationStore): void => {
+  const current = readStore();
+  const next: FundValuationStore = { ...current };
+
+  Object.entries(store).forEach(([code, points]) => {
+    const byKey = new Map<string, FundValuationSeriesPoint>();
+    (next[code] ?? []).forEach((point) => byKey.set(`${point.date} ${point.time}`, point));
+    points.forEach((point) => byKey.set(`${point.date} ${point.time}`, point));
+    next[code] = Array.from(byKey.values()).filter(isValidPoint).sort(comparePoints);
+  });
+
+  writeStore(next);
+};
 
 export const clearFundValuationSeries = (code?: string): void => {
   if (!code) {

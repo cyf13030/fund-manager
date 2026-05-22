@@ -180,4 +180,29 @@ describe('fundBackup', () => {
     const normalized = parseAndNormalizeFundBackupPayload(payload);
     expect(normalized.availableAssets).toBe(0);
   });
+
+  it('支持在备份中携带盘中估值序列', () => {
+    const payload = buildFundBackupPayload(
+      [buildFund()],
+      '2026-03-19T00:00:00.000Z',
+      [],
+      [],
+      [],
+      undefined,
+      undefined,
+      undefined,
+      {
+        '000001': [
+          { date: '2026-03-19', time: '14:59', estimatedNav: 1.251 },
+          { date: 'bad', time: '14:58', estimatedNav: 1.24 },
+        ],
+      },
+    );
+
+    const normalized = parseAndNormalizeFundBackupPayload(payload);
+
+    expect(normalized.fundValuationTimeseries).toEqual({
+      '000001': [{ date: '2026-03-19', time: '14:59', estimatedNav: 1.251 }],
+    });
+  });
 });

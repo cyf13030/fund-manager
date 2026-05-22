@@ -59,6 +59,7 @@ interface FundBackupPayload {
   investmentProfile?: InvestmentProfileSnapshot;
   availableAssets?: number;
   fundDailyEarnings?: FundDailyEarningsScopedMap;
+  fundValuationTimeseries?: FundValuationScopedMap;
 }
 
 type AnalysisStateSchemaVersion = 1;
@@ -80,6 +81,14 @@ interface DailyEarningsPoint {
 
 type FundDailyEarningsScopedMap = Record<string, Record<string, DailyEarningsPoint[]>>;
 
+interface FundValuationSeriesPoint {
+  date: string;
+  time: string;
+  estimatedNav: number;
+}
+
+type FundValuationScopedMap = Record<string, FundValuationSeriesPoint[]>;
+
 interface DailyEarningsTrendSummary {
   scope: string;
   latestDate: string | null;
@@ -88,6 +97,28 @@ interface DailyEarningsTrendSummary {
   previousEarnings: number | null;
   recentPoints: Array<{ date: string; earnings: number }>;
   trendText: string | null;
+}
+
+interface ValuationBacktestItem {
+  code: string;
+  name: string;
+  date: string;
+  time: string;
+  estimatedNav: number;
+  officialNav: number;
+  errorPct: number;
+  reliability: 'high' | 'medium' | 'low';
+}
+
+interface ValuationBacktestSummary {
+  status: 'available' | 'missing';
+  sampleCount: number;
+  averageAbsErrorPct: number | null;
+  maxAbsErrorPct: number | null;
+  reliableCount: number;
+  unreliableCount: number;
+  items: ValuationBacktestItem[];
+  note: string;
 }
 
 interface BackupFund {
@@ -331,6 +362,7 @@ interface HoldingsSnapshot {
   riskRadar: PortfolioRiskRadarItem[];
   dataCoverage: HoldingsDataCoverage;
   dailyEarningsSummary?: DailyEarningsTrendSummary;
+  valuationBacktestSummary?: ValuationBacktestSummary;
   investmentProfile?: InvestmentProfileSnapshot;
   transactionSettlement: TransactionSettlementContext;
 }
@@ -1068,6 +1100,86 @@ const buildDailyEarningsTrendSummary = (raw: unknown): DailyEarningsTrendSummary
     previousEarnings,
     recentPoints,
     trendText,
+  };
+};
+
+const isFundValuationSeriesPoint = (value: unknown): value is FundValuationSeriesPoint =>
+  isNonEmptyObject(value) &&
+  typeof value.date === 'string' &&
+  /^\d{4}-\d{2}-\d{2}$/.test(value.date) &&
+  typeof value.time === 'string' &&
+  /^\d{2}:\d{2}$/.test(value.time) &&
+  typeof value.estimatedNav === 'number' &&
+  Number.isFinite(value.estimatedNav) &&
+  value.estimatedNav > 0;
+
+const resolveValuationReliability = (absErrorPct: number): ValuationBacktestItem['reliability'] => {
+  if (absErrorPct <= 0.35) return 'high';
+  if (absErrorPct <= 0.8) return 'medium';
+  return 'low';
+};
+
+const buildValuationBacktestSummary = (
+  funds: BackupFund[],
+  rawSeries: unknown,
+): ValuationBacktestSummary | undefined => {
+  if (!isNonEmptyObject(rawSeries)) return undefined;
+
+  const items = funds
+    .filter((fund) => fund.holdingShares > 0 && fund.currentNav > 0 && fund.todayChangeIsEstimated !== true)
+    .map((fund) => {
+      const series = rawSeries[fund.code];
+      if (!Array.isArray(series)) return null;
+      const latestSameDayPoint = series
+        .filter(isFundValuationSeriesPoint)
+        .filter((point) => point.date === fund.lastUpdate)
+        .sort((a, b) => a.time.localeCompare(b.time))
+        .at(-1);
+      if (!latestSameDayPoint) return null;
+
+      const errorPct = round(((latestSameDayPoint.estimatedNav - fund.currentNav) / fund.currentNav) * 100);
+      const absErrorPct = Math.abs(errorPct);
+      return {
+        code: fund.code,
+        name: fund.name,
+        date: latestSameDayPoint.date,
+        time: latestSameDayPoint.time,
+        estimatedNav: round(latestSameDayPoint.estimatedNav, 4),
+        officialNav: round(fund.currentNav, 4),
+        errorPct,
+        reliability: resolveValuationReliability(absErrorPct),
+      } satisfies ValuationBacktestItem;
+    })
+    .filter((item): item is ValuationBacktestItem => Boolean(item))
+    .sort((a, b) => Math.abs(b.errorPct) - Math.abs(a.errorPct));
+
+  if (items.length === 0) {
+    return {
+      status: 'missing',
+      sampleCount: 0,
+      averageAbsErrorPct: null,
+      maxAbsErrorPct: null,
+      reliableCount: 0,
+      unreliableCount: 0,
+      items: [],
+      note: '暂无同日期官方净值和盘中估值可用于误差回测。',
+    };
+  }
+
+  const absErrors = items.map((item) => Math.abs(item.errorPct));
+  const averageAbsErrorPct = round(absErrors.reduce((sum, value) => sum + value, 0) / absErrors.length);
+  const maxAbsErrorPct = round(Math.max(...absErrors));
+  const reliableCount = items.filter((item) => item.reliability !== 'low').length;
+
+  return {
+    status: 'available',
+    sampleCount: items.length,
+    averageAbsErrorPct,
+    maxAbsErrorPct,
+    reliableCount,
+    unreliableCount: items.length - reliableCount,
+    items: items.slice(0, 8),
+    note: '基于同一净值日期的最后一条盘中估值与官方净值计算，仅用于评估估值可信度。',
   };
 };
 
@@ -3174,6 +3286,7 @@ const buildHoldingsSnapshot = async (
   const underlyingExposures = buildUnderlyingExposures(holdings, totalAssets);
   const riskRadar = buildPortfolioRiskRadar(holdings, totalAssets);
   const dailyEarningsSummary = buildDailyEarningsTrendSummary(payload.fundDailyEarnings);
+  const valuationBacktestSummary = buildValuationBacktestSummary(payload.funds, payload.fundValuationTimeseries);
   const transactionSettlement = buildTransactionSettlementContext(payload.funds);
 
   return {
@@ -3197,6 +3310,7 @@ const buildHoldingsSnapshot = async (
     riskRadar,
     dataCoverage: buildHoldingsDataCoverage(holdings, payload.investmentProfile),
     dailyEarningsSummary,
+    valuationBacktestSummary,
     investmentProfile: payload.investmentProfile,
     transactionSettlement,
   };
@@ -4397,6 +4511,7 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
       holdingGainPct: holdings.holdingGainPct,
       availableAssets: holdings.availableAssets ?? null,
       dailyEarningsTrend: holdings.dailyEarningsSummary?.trendText ?? null,
+      valuationBacktest: holdings.valuationBacktestSummary ?? null,
       transactionSettlement: holdings.transactionSettlement,
       quantSummary,
       highRiskItems: holdings.riskRadar.filter((item) => item.level === 'high').map((item) => item.label),
@@ -4509,6 +4624,7 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
       totalDayGainPct: holdings.totalDayGainPct,
       holdingGainPct: holdings.holdingGainPct,
       dailyEarningsTrend: holdings.dailyEarningsSummary?.trendText ?? null,
+      valuationBacktest: holdings.valuationBacktestSummary ?? null,
       transactionSettlement: holdings.transactionSettlement,
       quantSummary,
       dataCoverage: holdings.dataCoverage,
@@ -4625,6 +4741,7 @@ const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: strin
     },
     portfolioRelevance: {
       totalDayGainPct: holdings.totalDayGainPct,
+      valuationBacktest: holdings.valuationBacktestSummary ?? null,
       topExposures: holdings.underlyingExposures.slice(0, 8),
       marketFit: buildPortfolioMarketFitSummary(holdings, fundFlowSnapshot),
       dataCoverage: holdings.dataCoverage,
@@ -4689,6 +4806,7 @@ const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: s
       availableAssets: holdings.availableAssets ?? null,
       totalDayGainPct: holdings.totalDayGainPct,
       holdingGainPct: holdings.holdingGainPct,
+      valuationBacktest: holdings.valuationBacktestSummary ?? null,
       transactionSettlement: holdings.transactionSettlement,
       concentrationRisk: holdings.riskRadar.filter((item) => item.key === 'concentration' || item.level === 'high'),
       quantSummary,
@@ -4805,6 +4923,9 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
     `总收益: ${holdings.holdingGain} (${holdings.holdingGainPct}%)`,
     `日收益: ${holdings.totalDayGain} (${holdings.totalDayGainPct}%)`,
     holdings.dailyEarningsSummary?.trendText ? `近3日每日收益: ${holdings.dailyEarningsSummary.trendText}` : '近3日每日收益: missing',
+    holdings.valuationBacktestSummary
+      ? `盘中估值误差回测: ${holdings.valuationBacktestSummary.status}，样本 ${holdings.valuationBacktestSummary.sampleCount}，平均绝对误差 ${holdings.valuationBacktestSummary.averageAbsErrorPct ?? 'missing'}%，最大误差 ${holdings.valuationBacktestSummary.maxAbsErrorPct ?? 'missing'}%，低可信样本 ${holdings.valuationBacktestSummary.unreliableCount}`
+      : '盘中估值误差回测: missing',
     topGain ? `收益最佳: ${topGain.name} (${topGain.totalGainPct}%)` : '',
     topLoss ? `收益最弱: ${topLoss.name} (${topLoss.totalGainPct}%)` : '',
     `前三大仓位集中度: ${(concentration * 100).toFixed(1)}%`,

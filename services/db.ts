@@ -40,7 +40,12 @@ import {
   recordFundDailyEarnings,
   replaceAllFundDailyEarnings,
 } from './fundDailyEarnings';
-import { recordFundValuationSeries } from './fundValuationTimeseries';
+import {
+  getAllFundValuationSeries,
+  mergeFundValuationSeries,
+  recordFundValuationSeries,
+  replaceAllFundValuationSeries,
+} from './fundValuationTimeseries';
 import type { RefreshExecutionResult, RefreshExecutionStatus } from './refreshPolicy';
 
 export {
@@ -1028,6 +1033,7 @@ export const exportFunds = async (): Promise<void> => {
   const allInvestmentPlans = await db.investmentPlans.toArray();
   const availableAssets = isAssetConfigured() ? getAvailableAssets() : undefined;
   const fundDailyEarnings = getAllFundDailyEarnings();
+  const fundValuationTimeseries = getAllFundValuationSeries();
   const data = buildFundBackupPayload(
     allFunds,
     undefined,
@@ -1037,6 +1043,7 @@ export const exportFunds = async (): Promise<void> => {
     investmentProfile,
     availableAssets,
     fundDailyEarnings,
+    fundValuationTimeseries,
   );
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -1081,6 +1088,7 @@ export const exportFundsToJsonString = async (
   const allInvestmentPlans = await db.investmentPlans.toArray();
   const availableAssets = isAssetConfigured() ? getAvailableAssets() : undefined;
   const fundDailyEarnings = getAllFundDailyEarnings();
+  const fundValuationTimeseries = getAllFundValuationSeries();
   return JSON.stringify(
     buildFundBackupPayload(
       allFunds,
@@ -1091,6 +1099,7 @@ export const exportFundsToJsonString = async (
       investmentProfile,
       availableAssets,
       fundDailyEarnings,
+      fundValuationTimeseries,
     ),
     null,
     2,
@@ -1111,6 +1120,7 @@ export const importFundsFromBackupContent = async (
     investmentPlans: importedInvestmentPlans,
     availableAssets: importedAvailableAssets,
     fundDailyEarnings: importedFundDailyEarnings,
+    fundValuationTimeseries: importedFundValuationTimeseries,
   } = parseAndNormalizeFundBackupPayload(content);
 
   const importMode = options?.importMode ?? 'merge';
@@ -1184,6 +1194,10 @@ export const importFundsFromBackupContent = async (
 
     if (importedFundDailyEarnings !== undefined) {
       replaceAllFundDailyEarnings(importedFundDailyEarnings);
+    }
+
+    if (importedFundValuationTimeseries !== undefined) {
+      replaceAllFundValuationSeries(importedFundValuationTimeseries);
     }
 
     return {
@@ -1310,6 +1324,10 @@ export const importFundsFromBackupContent = async (
 
   if (importedFundDailyEarnings !== undefined) {
     mergeFundDailyEarnings(importedFundDailyEarnings);
+  }
+
+  if (importedFundValuationTimeseries !== undefined) {
+    mergeFundValuationSeries(importedFundValuationTimeseries);
   }
 
   return { added, skipped };

@@ -24,6 +24,12 @@ const backupPayload = {
       ],
     },
   },
+  fundValuationTimeseries: {
+    '000001': [
+      { date: '2026-05-18', time: '14:56', estimatedNav: 1.198 },
+      { date: '2026-05-18', time: '14:59', estimatedNav: 1.204 },
+    ],
+  },
   funds: [
     {
       code: '000001',
@@ -607,6 +613,8 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('待到账/待确认卖出资金: 119');
     expect(aiBody.messages[0].content).toContain('T+1 交易确认口径');
     expect(aiBody.messages[0].content).toContain('近3日每日收益: 2026-05-18 +1.80 元');
+    expect(aiBody.messages[0].content).toContain('盘中估值误差回测: available');
+    expect(aiBody.messages[0].content).toContain('平均绝对误差 0.33%');
     expect(aiBody.messages[0].content).toContain('今日加仓候选');
     expect(aiBody.messages[0].content).toContain('不得编造新闻标题、财报数据、公告内容或资金流数据');
     expect(aiBody.messages[0].content).toContain('不要编造不存在的数据');
