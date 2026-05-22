@@ -165,6 +165,15 @@ const sinaNewsPayload = {
     ],
   },
 };
+const holdingsPayloadWithoutSector = {
+  data: {
+    portfolioDate: '2026-03-31',
+    equityHoldings: [
+      { ticker: '002475', name: '立讯精密', weight: 8.5 },
+      { ticker: '300308', name: '中际旭创', weight: 5.2 },
+    ],
+  },
+};
 
 const emptyEastMoneyNewsPayload = { data: { list: [] } };
 const emptySinaNewsPayload = { result: { data: [] } };
@@ -173,6 +182,14 @@ const eastMoneyFundFlowPayload = {
     diff: [
       { f12: 'BK0800', f14: '人工智能', f3: 2.1, f62: 3200000000, f184: 4.5 },
       { f12: 'BK0428', f14: '新能源', f3: 1.2, f62: 1800000000, f184: 2.8 },
+    ],
+  },
+};
+const eastMoneyElectronicsFundFlowPayload = {
+  data: {
+    diff: [
+      { f12: 'BK1201', f14: '电子', f3: 3.5, f62: 25491000000, f184: 8.8 },
+      { f12: 'BK1215', f14: '通信', f3: 2.2, f62: 6786000000, f184: 4.2 },
     ],
   },
 };
@@ -406,6 +423,50 @@ describe('telegram ai reminder worker', () => {
     expect(body.sourceStatus.some((item) => item.label === '盘后消息')).toBe(true);
     expect(body.sourceStatus.some((item) => item.label === '北向资金')).toBe(true);
     expect(body.sourceStatus.some((item) => item.label === '市场宽度')).toBe(true);
+  });
+
+  it('持仓缺少 sector 时会用重仓股关键词弱匹配资金主线', async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: {
+              'fund-manager-sync.json': {
+                content: JSON.stringify(backupPayload),
+              },
+            },
+          }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayloadWithoutSector));
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) {
+        return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
+      }
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+        if (url.includes('f37') || url.includes('f38')) {
+          return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
+        }
+        return Promise.resolve(jsonResponse(eastMoneyElectronicsFundFlowPayload));
+      }
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    const body = (await response.json()) as {
+      cards: Array<{ title: string; value: string; note: string }>;
+    };
+
+    const fitCard = body.cards.find((card) => card.title === '持仓匹配');
+    expect(fitCard?.value).toBe('弱匹配');
+    expect(fitCard?.note).toContain('弱匹配命中');
+    expect(fitCard?.note).toContain('不等同于真实行业字段');
   });
 
   it('资金流空数据时会沿用最近可用主力方向', async () => {

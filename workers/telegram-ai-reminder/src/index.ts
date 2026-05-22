@@ -259,6 +259,7 @@ interface UnderlyingExposureItem {
   theme: string;
   marketValue: number;
   portfolioPct: number;
+  source: 'sector' | 'equityKeyword' | 'fundKeyword';
   topHoldings: Array<{
     ticker: string;
     name: string;
@@ -558,7 +559,7 @@ interface MarketStructureSummary {
 }
 
 interface PortfolioMarketFitSummary {
-  level: '高' | '中' | '低' | '缺失';
+  level: '高' | '中' | '低' | '弱匹配' | '缺失';
   score: number;
   matchedThemes: Array<{
     theme: string;
@@ -566,6 +567,7 @@ interface PortfolioMarketFitSummary {
     matchedMarketTheme: string;
     rank: number;
     netInflow: number;
+    source: UnderlyingExposureItem['source'];
   }>;
   reason: string;
 }
@@ -2486,27 +2488,68 @@ const buildEquityOverlap = (holdings: HoldingSnapshotItem[]): EquityOverlapItem[
     .slice(0, 20);
 };
 
+const THEME_INFERENCE_RULES: Array<{ theme: string; keywords: string[] }> = [
+  { theme: '半导体', keywords: ['半导体', '芯片', '晶圆', '封测', '光刻', '集成电路', '中芯', '兆易', '韦尔'] },
+  { theme: '电子', keywords: ['电子', '元件', 'PCB', '印制电路', 'MLCC', '消费电子', '立讯', '歌尔', '鹏鼎', '沪电'] },
+  { theme: '通信', keywords: ['通信', '光模块', '光通信', '通信设备', '中际旭创', '新易盛', '工业富联'] },
+  { theme: '人工智能', keywords: ['人工智能', 'AI', 'AIGC', '算力', '大模型', '机器人', '数据中心'] },
+  { theme: '新能源', keywords: ['新能源', '锂电', '锂电池', '电池', '储能', '光伏', '风电', '宁德时代', '阳光电源'] },
+  { theme: '消费', keywords: ['消费', '白酒', '食品饮料', '贵州茅台', '五粮液', '泸州老窖', '山西汾酒'] },
+  { theme: '医药', keywords: ['医药', '医疗', '创新药', '医疗器械', 'CXO', '药明', '恒瑞', '迈瑞'] },
+  { theme: '金融', keywords: ['金融', '银行', '证券', '券商', '保险', '招商银行', '东方财富', '中信证券'] },
+  { theme: '汽车', keywords: ['汽车', '新能源车', '智能驾驶', '整车', '汽车零部件', '比亚迪', '赛力斯'] },
+  { theme: '港股', keywords: ['港股', '恒生', '恒生科技', '港股通', '腾讯控股', '美团', '阿里巴巴'] },
+  { theme: '互联网', keywords: ['互联网', '平台经济', '游戏', '传媒', '电商', '腾讯', '网易'] },
+  { theme: '军工', keywords: ['军工', '国防', '航空', '航天', '发动机', '低空经济', '中航'] },
+  { theme: '有色金属', keywords: ['有色', '黄金', '铜', '铝', '稀土', '紫金矿业', '洛阳钼业'] },
+];
+
+const inferThemeFromText = (text: string) => {
+  const normalized = text.toLowerCase();
+  return THEME_INFERENCE_RULES.find((rule) =>
+    rule.keywords.some((keyword) => normalized.includes(keyword.toLowerCase())),
+  )?.theme;
+};
+
 const buildUnderlyingExposures = (holdings: HoldingSnapshotItem[], totalAssets: number) => {
   const exposureByTheme = new Map<
     string,
     {
       marketValue: number;
+      source: UnderlyingExposureItem['source'];
       holdings: Map<string, { ticker: string; name: string; exposure: number; funds: Set<string> }>;
     }
   >();
 
+  const sourceRank: Record<UnderlyingExposureItem['source'], number> = {
+    sector: 3,
+    equityKeyword: 2,
+    fundKeyword: 1,
+  };
+
   holdings.forEach((fund) => {
     const fundMarketValue = fund.marketValue;
-    fund.topEquityHoldings?.forEach((equity) => {
-      const theme = equity.sector?.trim();
+    const fundTheme = inferThemeFromText(fund.name);
+    const topEquityHoldings = fund.topEquityHoldings ?? [];
+    topEquityHoldings.forEach((equity) => {
+      const sectorTheme = equity.sector?.trim();
+      const equityTheme = inferThemeFromText(`${equity.name} ${equity.ticker}`);
+      const theme = sectorTheme || equityTheme || fundTheme;
+      const source: UnderlyingExposureItem['source'] = sectorTheme
+        ? 'sector'
+        : equityTheme
+          ? 'equityKeyword'
+          : 'fundKeyword';
       const ticker = equity.ticker.trim();
       if (!theme || !ticker || equity.weight <= 0) return;
       const exposure = fundMarketValue * (equity.weight / 100);
       const currentTheme = exposureByTheme.get(theme) ?? {
         marketValue: 0,
+        source,
         holdings: new Map<string, { ticker: string; name: string; exposure: number; funds: Set<string> }>(),
       };
       currentTheme.marketValue += exposure;
+      if (sourceRank[source] > sourceRank[currentTheme.source]) currentTheme.source = source;
 
       const currentHolding = currentTheme.holdings.get(ticker) ?? {
         ticker,
@@ -2519,6 +2562,25 @@ const buildUnderlyingExposures = (holdings: HoldingSnapshotItem[], totalAssets: 
       currentTheme.holdings.set(ticker, currentHolding);
       exposureByTheme.set(theme, currentTheme);
     });
+
+    if (topEquityHoldings.length === 0 && fundTheme && fundMarketValue > 0) {
+      const currentTheme = exposureByTheme.get(fundTheme) ?? {
+        marketValue: 0,
+        source: 'fundKeyword' as const,
+        holdings: new Map<string, { ticker: string; name: string; exposure: number; funds: Set<string> }>(),
+      };
+      currentTheme.marketValue += fundMarketValue;
+      const currentHolding = currentTheme.holdings.get(fund.code) ?? {
+        ticker: fund.code,
+        name: fund.name,
+        exposure: 0,
+        funds: new Set<string>(),
+      };
+      currentHolding.exposure += fundMarketValue;
+      currentHolding.funds.add(fund.name);
+      currentTheme.holdings.set(fund.code, currentHolding);
+      exposureByTheme.set(fundTheme, currentTheme);
+    }
   });
 
   return Array.from(exposureByTheme.entries())
@@ -2526,6 +2588,7 @@ const buildUnderlyingExposures = (holdings: HoldingSnapshotItem[], totalAssets: 
       theme,
       marketValue: round(item.marketValue),
       portfolioPct: totalAssets > 0 ? round((item.marketValue / totalAssets) * 100) : 0,
+      source: item.source,
       topHoldings: Array.from(item.holdings.values())
         .sort((a, b) => b.exposure - a.exposure)
         .slice(0, 5)
@@ -3004,12 +3067,39 @@ const buildPortfolioMarketFitSummary = (
   fundFlowSnapshot: FundFlowSnapshot | undefined,
 ): PortfolioMarketFitSummary => {
   const flowItems = fundFlowSnapshot?.items.slice(0, 10) ?? [];
-  if (holdings.underlyingExposures.length === 0 || flowItems.length === 0) {
+  if (holdings.holdings.length === 0) {
     return {
       level: '缺失',
       score: 0,
       matchedThemes: [],
-      reason: '底层主题暴露或市场主线资金流缺失，无法计算持仓匹配度。',
+      reason: '当前没有持仓基金，无法计算持仓匹配度。',
+    };
+  }
+
+  if (flowItems.length === 0) {
+    return {
+      level: '缺失',
+      score: 0,
+      matchedThemes: [],
+      reason: '市场主线资金流缺失，无法计算持仓匹配度。',
+    };
+  }
+
+  if (holdings.underlyingExposures.length === 0) {
+    const topHoldingCount = holdings.holdings.filter((item) => item.topEquityHoldings?.length).length;
+    const sectorCount = holdings.holdings.filter((item) =>
+      item.topEquityHoldings?.some((equity) => equity.sector?.trim()),
+    ).length;
+    return {
+      level: '缺失',
+      score: 0,
+      matchedThemes: [],
+      reason:
+        topHoldingCount === 0
+          ? `持仓底层主题暴露缺失：${holdings.holdings.length} 只持仓基金均未成功获取前十大持仓。`
+          : sectorCount === 0
+            ? `持仓底层主题暴露缺失：${topHoldingCount}/${holdings.holdings.length} 只基金有前十大持仓，但缺少行业字段且弱匹配未命中。`
+            : `持仓底层主题暴露缺失：仅 ${sectorCount}/${holdings.holdings.length} 只基金带行业字段，且弱匹配未形成有效主题。`,
     };
   }
 
@@ -3023,14 +3113,26 @@ const buildPortfolioMarketFitSummary = (
         matchedMarketTheme: matchedFlow.name,
         rank: matchedFlow.netInflowRank,
         netInflow: matchedFlow.netInflow,
+        source: exposure.source,
       },
     ];
   });
   const score = round(matchedThemes.reduce((sum, item) => sum + item.portfolioPct, 0));
-  const level = score >= 20 || matchedThemes.length >= 3 ? '高' : score >= 8 || matchedThemes.length >= 2 ? '中' : matchedThemes.length > 0 ? '低' : '低';
+  const hasOnlyWeakMatches = matchedThemes.length > 0 && matchedThemes.every((item) => item.source !== 'sector');
+  const level = hasOnlyWeakMatches
+    ? '弱匹配'
+    : score >= 20 || matchedThemes.length >= 3
+      ? '高'
+      : score >= 8 || matchedThemes.length >= 2
+        ? '中'
+        : matchedThemes.length > 0
+          ? '低'
+          : '低';
   const reason =
     matchedThemes.length > 0
-      ? `命中 ${matchedThemes.length} 个持仓主题，合计约 ${score}% 组合暴露与资金主线相关。`
+      ? hasOnlyWeakMatches
+        ? `弱匹配命中 ${matchedThemes.length} 个主题，约 ${score}% 组合线索与资金主线相关；该结果来自重仓股/基金名称关键词，不等同于真实行业字段。`
+        : `命中 ${matchedThemes.length} 个持仓主题，合计约 ${score}% 组合暴露与资金主线相关。`
       : '当前资金主线与组合底层主题暴露重合较少。';
 
   return { level, score, matchedThemes, reason };
@@ -3247,7 +3349,9 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
             ? 'info'
             : portfolioMarketFit.level === '低'
               ? 'warning'
-              : 'neutral',
+              : portfolioMarketFit.level === '弱匹配'
+                ? 'info'
+                : 'neutral',
     },
   ];
 
@@ -3793,7 +3897,7 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
     portfolioMarketFit.matchedThemes.length > 0
       ? `匹配的持仓主题: ${portfolioMarketFit.matchedThemes
           .slice(0, 5)
-          .map((item) => `${item.theme}->${item.matchedMarketTheme}(${item.portfolioPct}%)`)
+          .map((item) => `${item.theme}->${item.matchedMarketTheme}(${item.portfolioPct}%, ${item.source})`)
           .join('、')}`
       : '匹配的持仓主题: missing',
     `外围市场/指数期货数据: ${overseasMarketSnapshot?.dataStatus ?? 'missing'}`,
@@ -4810,6 +4914,8 @@ export default {
 
 export const __resetTelegramAiReminderStateForTests = () => {
   fundFlowHistory.length = 0;
+  fundHoldingsCache.clear();
+  quantSignalCache.clear();
   cachedFundFlowSnapshot = undefined;
   cachedMarketBreadthSnapshot = undefined;
   cachedNorthboundCapitalSnapshot = undefined;
