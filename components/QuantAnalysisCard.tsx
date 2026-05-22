@@ -100,7 +100,9 @@ export const QuantAnalysisCard: React.FC = () => {
   };
 
   const loadInterpretation = async (force = false) => {
-    const current = analysis || (await fetchQuantAnalysis(false));
+    const shouldRefreshAnalysis =
+      force || !analysis || analysis.portfolio.availableCount < analysis.portfolio.totalCount;
+    const current = await fetchQuantAnalysis(shouldRefreshAnalysis);
     if (!current) {
       setInterpretationError('量化数据读取失败，暂不能生成 AI 解读。');
       return;

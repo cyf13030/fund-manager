@@ -54,7 +54,7 @@ export interface QuantAnalysisResponse {
 
 const DEFAULT_QUANT_ANALYSIS_WORKER_URL = 'https://fund-manager-telegram-ai-reminder.nizhan80.workers.dev';
 const QUANT_ANALYSIS_CACHE_TTL_MS = 2 * 60 * 1000;
-const QUANT_ANALYSIS_STORAGE_KEY = 'fundManager.quantAnalysisCache.v1';
+const QUANT_ANALYSIS_STORAGE_KEY = 'fundManager.quantAnalysisCache.v2';
 
 interface CacheEntry {
   expiresAt: number;
