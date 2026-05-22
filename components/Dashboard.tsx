@@ -57,6 +57,7 @@ import {
 import { computeRealizedGain, deriveFundHoldingDisplayMetrics } from '../services/fundDayChange';
 import { getCachedFundStreaks } from '../services/streakCalculator';
 import { AssetAllocationCard } from './AssetAllocationCard';
+import { QuantAnalysisCard } from './QuantAnalysisCard';
 import {
   addAvailableForSell,
   getAvailableAssets,
@@ -1729,7 +1730,7 @@ export const Dashboard: React.FC = () => {
         </section>
 
         <section className="mt-3 px-4 pb-2 md:mt-5 md:px-0 md:pb-2">
-          <div className="grid gap-3 md:grid-cols-[1.3fr_1fr]">
+          <div className="grid gap-3 md:grid-cols-3">
             <div className="glass-card flex flex-col justify-between rounded-[1.75rem] px-5 py-5 md:px-6 md:py-6">
               <div className="mb-4 flex items-center justify-between">
                 <div>
@@ -1791,6 +1792,7 @@ export const Dashboard: React.FC = () => {
                 />
               </div>
             </button>
+            <QuantAnalysisCard />
           </div>
         </section>
       </div>

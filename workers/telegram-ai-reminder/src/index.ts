@@ -234,6 +234,11 @@ interface FundQuantSignalSnapshot {
   trendStatus?: 'strong' | 'neutral' | 'weak' | 'insufficient';
   volatility60d?: number;
   maxDrawdown120d?: number;
+  annualizedReturn120d?: number;
+  sharpe120dProxy?: number;
+  sortino120dProxy?: number;
+  calmar120dProxy?: number;
+  positiveDayRate60d?: number;
   sampleSize: number;
   reason: string;
 }
@@ -269,6 +274,58 @@ interface QuantBenchmarkSnapshot {
   code?: string;
   source: 'parentEtf' | 'trackingInfo';
   changePct?: number | null;
+}
+
+interface QuantAnalysisFundItem {
+  code: string;
+  name: string;
+  categoryLabel: string;
+  marketLabel: string;
+  signal: FundQuantSignalSnapshot['signal'];
+  score: number;
+  dataStatus: FundQuantSignalSnapshot['dataStatus'];
+  reason: string;
+  trendLabel: string;
+  valuationLabel: string;
+  valuationPositionPct?: number;
+  benchmarkText: string;
+  metrics: {
+    return20d?: number;
+    return60d?: number;
+    annualizedReturn120d?: number;
+    distanceToMa20Pct?: number;
+    maxDrawdown120d?: number;
+    volatility60d?: number;
+    positiveDayRate60d?: number;
+    sharpe120dProxy?: number;
+    sortino120dProxy?: number;
+    calmar120dProxy?: number;
+  };
+}
+
+interface QuantAnalysisGroup {
+  title: string;
+  items: QuantAnalysisFundItem[];
+}
+
+interface QuantAnalysisResult {
+  ok: true;
+  generatedAt: string;
+  portfolio: {
+    signal: FundQuantSignalSnapshot['signal'];
+    score: number;
+    availableCount: number;
+    totalCount: number;
+    coveragePct: number;
+    riskReturn: {
+      volatility60d?: number;
+      maxDrawdown120d?: number;
+      sharpe120dProxy?: number;
+      positiveDayRate60d?: number;
+    };
+  };
+  groups: QuantAnalysisGroup[];
+  note: string;
 }
 
 interface FundHoldingsEnrichmentSnapshot {
@@ -1929,6 +1986,47 @@ const calculateAnnualizedVolatilityPct = (navs: FundHistoricalNavPoint[], days: 
   return round(Math.sqrt(variance) * Math.sqrt(252) * 100);
 };
 
+const calculateDailyReturns = (navs: FundHistoricalNavPoint[], days: number) => {
+  const window = navs.slice(0, days + 1);
+  if (window.length < 21) return [];
+
+  return window.slice(0, -1).map((point, index) => {
+    const previous = window[index + 1];
+    return previous.nav > 0 ? point.nav / previous.nav - 1 : 0;
+  });
+};
+
+const calculateAnnualizedReturnPct = (navs: FundHistoricalNavPoint[], days: number) => {
+  const periodDays = Math.min(days, navs.length - 1);
+  const latest = navs[0];
+  const base = navs[periodDays];
+  if (periodDays < 21 || !latest || !base || base.nav <= 0) return undefined;
+
+  return round((latest.nav / base.nav) ** (252 / periodDays) * 100 - 100);
+};
+
+const calculateDownsideVolatilityPct = (navs: FundHistoricalNavPoint[], days: number) => {
+  const returns = calculateDailyReturns(navs, days);
+  if (returns.length < 21) return undefined;
+  const downsideReturns = returns.filter((value) => value < 0);
+  if (downsideReturns.length === 0) return undefined;
+
+  const downsideVariance = downsideReturns.reduce((sum, value) => sum + value ** 2, 0) / downsideReturns.length;
+  return round(Math.sqrt(downsideVariance) * Math.sqrt(252) * 100);
+};
+
+const calculatePositiveDayRatePct = (navs: FundHistoricalNavPoint[], days: number) => {
+  const returns = calculateDailyReturns(navs, days);
+  if (returns.length < 21) return undefined;
+  const positiveCount = returns.filter((value) => value > 0).length;
+  return round((positiveCount / returns.length) * 100);
+};
+
+const calculateRiskAdjustedRatio = (annualizedReturnPct?: number, denominatorPct?: number) => {
+  if (annualizedReturnPct === undefined || denominatorPct === undefined || denominatorPct <= 0) return undefined;
+  return round(annualizedReturnPct / denominatorPct);
+};
+
 const calculateMaxDrawdownPct = (navs: FundHistoricalNavPoint[], days: number) => {
   const ordered = navs.slice(0, days).reverse();
   if (ordered.length < 21) return undefined;
@@ -2153,6 +2251,13 @@ const buildFundQuantSignal = (
   const distanceToMa60Pct = latestNav && ma60 ? round((latestNav / ma60 - 1) * 100) : undefined;
   const volatility60d = navs.length >= 61 ? calculateAnnualizedVolatilityPct(navs, 60) : undefined;
   const maxDrawdown120d = calculateMaxDrawdownPct(navs, Math.min(120, navs.length));
+  const annualizedReturn120d = calculateAnnualizedReturnPct(navs, 120);
+  const volatility120d = calculateAnnualizedVolatilityPct(navs, Math.min(120, navs.length - 1));
+  const downsideVolatility120d = calculateDownsideVolatilityPct(navs, Math.min(120, navs.length - 1));
+  const sharpe120dProxy = calculateRiskAdjustedRatio(annualizedReturn120d, volatility120d);
+  const sortino120dProxy = calculateRiskAdjustedRatio(annualizedReturn120d, downsideVolatility120d);
+  const calmar120dProxy = calculateRiskAdjustedRatio(annualizedReturn120d, Math.abs(maxDrawdown120d ?? 0));
+  const positiveDayRate60d = calculatePositiveDayRatePct(navs, 60);
   const momentumScore = scoreMomentum(return20d, return60d, return120d);
   const riskScore = scoreRisk(volatility60d, maxDrawdown120d);
   const trendScore = scoreTrend(latestNav, ma20, ma60);
@@ -2181,10 +2286,15 @@ const buildFundQuantSignal = (
     trendStatus: getTrendStatus(trendScore),
     volatility60d,
     maxDrawdown120d,
+    annualizedReturn120d,
+    sharpe120dProxy,
+    sortino120dProxy,
+    calmar120dProxy,
+    positiveDayRate60d,
     sampleSize: navs.length,
     reason:
       navs.length >= 121
-        ? '基于基金历史净值计算动量、波动率、最大回撤和历史净值位置估值因子；估值仅为 proxy，不代表真实 PE/PB'
+        ? '基于基金历史净值计算动量、风险收益、波动率、最大回撤和历史净值位置估值因子；估值仅为 proxy，不代表真实 PE/PB'
         : '历史净值样本不足 121 条，已生成部分量化信号；估值仅为历史净值位置 proxy，不代表真实 PE/PB',
   };
 };
@@ -5564,6 +5674,11 @@ const formatQuantMetric = (value: number | undefined, suffix = '%') => {
   return `${value >= 0 ? '+' : ''}${round(value).toFixed(2)}${suffix}`;
 };
 
+const formatQuantRatio = (value: number | undefined) => {
+  if (value === undefined) return '缺失';
+  return round(value).toFixed(2);
+};
+
 const getQuantTrendLabel = (trendStatus?: FundQuantSignalSnapshot['trendStatus']) => {
   if (trendStatus === 'strong') return '均线偏强';
   if (trendStatus === 'weak') return '均线偏弱';
@@ -5586,7 +5701,7 @@ const formatQuantBenchmark = (benchmark: QuantBenchmarkSnapshot | null) => {
   return `基准: ${benchmark.name} ${formatPct(benchmark.changePct)}`;
 };
 
-const buildQuantAnalysisMessage = async (env: Env) => {
+const buildQuantAnalysisResult = async (env: Env): Promise<QuantAnalysisResult> => {
   const payload = await readGistBackup(env);
   const funds = payload.funds.filter((fund) => fund.holdingShares > 0 && fund.currentNav > 0);
   const signals = await mapWithConcurrency(
@@ -5621,38 +5736,112 @@ const buildQuantAnalysisMessage = async (env: Env) => {
     availableAssets > 0
       ? available.reduce((sum, item) => sum + item.signal.score * (item.marketValue / availableAssets), 0)
       : 0;
+  const weightedMetric = (selector: (signal: FundQuantSignalSnapshot) => number | undefined) => {
+    const metricItems = available.filter((item) => selector(item.signal) !== undefined);
+    const metricAssets = metricItems.reduce((sum, item) => sum + item.marketValue, 0);
+    if (metricItems.length === 0 || metricAssets <= 0) return undefined;
+    return round(
+      metricItems.reduce((sum, item) => {
+        const value = selector(item.signal);
+        return value === undefined ? sum : sum + value * (item.marketValue / metricAssets);
+      }, 0),
+    );
+  };
+  const weightedVolatility60d = weightedMetric((signal) => signal.volatility60d);
+  const weightedMaxDrawdown120d = weightedMetric((signal) => signal.maxDrawdown120d);
+  const weightedSharpe120dProxy = weightedMetric((signal) => signal.sharpe120dProxy);
+  const weightedPositiveDayRate60d = weightedMetric((signal) => signal.positiveDayRate60d);
   const sorted = [...signals].sort((a, b) => b.signal.score - a.signal.score);
   const groups = [
     { title: '强势持有', items: sorted.filter((item) => item.groupLabel === '强势持有') },
     { title: '中性观察', items: sorted.filter((item) => item.groupLabel === '中性观察') },
     { title: '风险升高', items: sorted.filter((item) => item.groupLabel === '风险升高') },
     { title: '数据不足', items: sorted.filter((item) => item.groupLabel === '数据不足') },
-  ].filter((group) => group.items.length > 0);
+  ]
+    .map<QuantAnalysisGroup>((group) => ({
+      title: group.title,
+      items: group.items.map((item) => {
+        const { fund, signal } = item;
+        return {
+          code: fund.code,
+          name: fund.name,
+          categoryLabel: item.categoryLabel,
+          marketLabel: item.marketLabel,
+          signal: signal.signal,
+          score: signal.score,
+          dataStatus: signal.dataStatus,
+          reason: signal.reason,
+          trendLabel: getQuantTrendLabel(signal.trendStatus),
+          valuationLabel: getQuantValuationLabel(signal),
+          valuationPositionPct: signal.valuationPositionPct,
+          benchmarkText: formatQuantBenchmark(item.benchmark),
+          metrics: {
+            return20d: signal.return20d,
+            return60d: signal.return60d,
+            annualizedReturn120d: signal.annualizedReturn120d,
+            distanceToMa20Pct: signal.distanceToMa20Pct,
+            maxDrawdown120d: signal.maxDrawdown120d,
+            volatility60d: signal.volatility60d,
+            positiveDayRate60d: signal.positiveDayRate60d,
+            sharpe120dProxy: signal.sharpe120dProxy,
+            sortino120dProxy: signal.sortino120dProxy,
+            calmar120dProxy: signal.calmar120dProxy,
+          },
+        };
+      }),
+    }))
+    .filter((group) => group.items.length > 0);
 
-  const fundLines = groups.flatMap((group) => [
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    portfolio: {
+      signal: getQuantSignalLabel(portfolioScore),
+      score: round(portfolioScore),
+      availableCount: available.length,
+      totalCount: funds.length,
+      coveragePct: totalAssets > 0 ? round((availableAssets / totalAssets) * 100) : 0,
+      riskReturn: {
+        volatility60d: weightedVolatility60d,
+        maxDrawdown120d: weightedMaxDrawdown120d,
+        sharpe120dProxy: weightedSharpe120dProxy,
+        positiveDayRate60d: weightedPositiveDayRate60d,
+      },
+    },
+    groups,
+    note: '评分基于历史净值动量、MA20/MA60 趋势、历史净值位置估值 proxy、波动率、最大回撤和风险收益 proxy；估值不是 PE/PB，不代表基金便宜或昂贵。',
+  };
+};
+
+const buildQuantAnalysisMessageFromResult = (result: QuantAnalysisResult) => {
+  const fundLines = result.groups.flatMap((group) => [
     `${group.title}：`,
     ...group.items.map((item, index) => {
-      const { fund, signal } = item;
-      if (signal.dataStatus !== 'available') {
-        return `${index + 1}. ${fund.name}（${item.categoryLabel}/${item.marketLabel}）：观望，${signal.reason}`;
+      if (item.dataStatus !== 'available') {
+        return `${index + 1}. ${item.name}（${item.categoryLabel}/${item.marketLabel}）：观望，${item.reason}`;
       }
 
-      return `${index + 1}. ${fund.name}（${item.categoryLabel}/${item.marketLabel}）：${signal.signal}，评分 ${formatQuantMetric(signal.score, '')}，20日 ${formatQuantMetric(signal.return20d)}，60日 ${formatQuantMetric(signal.return60d)}，MA20 ${formatQuantMetric(signal.distanceToMa20Pct)}，${getQuantTrendLabel(signal.trendStatus)}，${getQuantValuationLabel(signal)}${signal.valuationPositionPct !== undefined ? `（历史位置 ${signal.valuationPositionPct.toFixed(0)}%）` : ''}，${formatQuantBenchmark(item.benchmark)}，回撤 ${formatQuantMetric(signal.maxDrawdown120d)}`;
+      return `${index + 1}. ${item.name}（${item.categoryLabel}/${item.marketLabel}）：${item.signal}，评分 ${formatQuantMetric(item.score, '')}，20日 ${formatQuantMetric(item.metrics.return20d)}，60日 ${formatQuantMetric(item.metrics.return60d)}，120日年化 ${formatQuantMetric(item.metrics.annualizedReturn120d)}，MA20 ${formatQuantMetric(item.metrics.distanceToMa20Pct)}，${item.trendLabel}，${item.valuationLabel}${item.valuationPositionPct !== undefined ? `（历史位置 ${item.valuationPositionPct.toFixed(0)}%）` : ''}，${item.benchmarkText}，回撤 ${formatQuantMetric(item.metrics.maxDrawdown120d)}，波动 ${formatQuantMetric(item.metrics.volatility60d)}，60日胜率 ${formatQuantMetric(item.metrics.positiveDayRate60d)}，夏普proxy ${formatQuantRatio(item.metrics.sharpe120dProxy)}，Sortino proxy ${formatQuantRatio(item.metrics.sortino120dProxy)}，Calmar proxy ${formatQuantRatio(item.metrics.calmar120dProxy)}`;
     }),
   ]);
 
   return [
     '养基AI量化分析',
-    `时间：${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+    `时间：${new Date(result.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
     '',
-    `组合量化信号：${getQuantSignalLabel(portfolioScore)}`,
-    `组合量化评分：${round(portfolioScore).toFixed(2)}`,
-    `覆盖：${available.length}/${funds.length} 只，资产覆盖 ${formatQuantMetric(totalAssets > 0 ? (availableAssets / totalAssets) * 100 : 0)}`,
-    '说明：评分基于历史净值动量、MA20/MA60 趋势、历史净值位置估值 proxy、波动率和最大回撤；估值不是 PE/PB，不代表基金便宜或昂贵。',
+    `组合量化信号：${result.portfolio.signal}`,
+    `组合量化评分：${result.portfolio.score.toFixed(2)}`,
+    `组合风险收益：60日年化波动 ${formatQuantMetric(result.portfolio.riskReturn.volatility60d)}，120日最大回撤 ${formatQuantMetric(result.portfolio.riskReturn.maxDrawdown120d)}，夏普proxy ${formatQuantRatio(result.portfolio.riskReturn.sharpe120dProxy)}，60日胜率 ${formatQuantMetric(result.portfolio.riskReturn.positiveDayRate60d)}`,
+    `覆盖：${result.portfolio.availableCount}/${result.portfolio.totalCount} 只，资产覆盖 ${formatQuantMetric(result.portfolio.coveragePct)}`,
+    `说明：${result.note}`,
     '',
     '基金明细：',
     ...fundLines,
   ].join('\n');
+};
+
+const buildQuantAnalysisMessage = async (env: Env) => {
+  return buildQuantAnalysisMessageFromResult(await buildQuantAnalysisResult(env));
 };
 
 const buildAnalysisMessage = async (
@@ -6146,6 +6335,17 @@ export default {
     if (url.pathname === '/news-summary' && request.method === 'GET') {
       try {
         return json(await buildPublicNewsSummary(env));
+      } catch (error) {
+        return json(
+          { ok: false, error: error instanceof Error ? error.message : '未知错误' },
+          500,
+        );
+      }
+    }
+
+    if (url.pathname === '/quant-analysis' && request.method === 'GET') {
+      try {
+        return json(await buildQuantAnalysisResult(env));
       } catch (error) {
         return json(
           { ok: false, error: error instanceof Error ? error.message : '未知错误' },

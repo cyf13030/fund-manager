@@ -457,6 +457,36 @@ describe('telegram ai reminder worker', () => {
     expect(body.sourceStatus.some((item) => item.label === '市场宽度')).toBe(true);
   });
 
+  it('quant-analysis endpoint returns structured portfolio quant data', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(new Request('https://worker.example/quant-analysis'), env);
+    const body = (await response.json()) as {
+      ok: boolean;
+      portfolio: {
+        signal: string;
+        score: number;
+        riskReturn: { sharpe120dProxy?: number; positiveDayRate60d?: number };
+      };
+      groups: Array<{ title: string; items: Array<{ name: string; metrics: { volatility60d?: number } }> }>;
+      note: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    expect(body.ok).toBe(true);
+    expect(body.portfolio.signal).toBeTruthy();
+    expect(typeof body.portfolio.score).toBe('number');
+    expect(body.portfolio.riskReturn.sharpe120dProxy).toBeDefined();
+    expect(body.portfolio.riskReturn.positiveDayRate60d).toBeDefined();
+    expect(body.groups.some((group) => group.title === '强势持有')).toBe(true);
+    expect(body.groups[0].items[0].name).toBe('测试基金A');
+    expect(body.groups[0].items[0].metrics.volatility60d).toBeDefined();
+    expect(body.note).toContain('估值不是 PE/PB');
+  });
+
   it('持仓缺少 sector 时会用重仓股关键词弱匹配资金主线', async () => {
     const fetchMock = vi.fn();
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
@@ -696,6 +726,9 @@ describe('telegram ai reminder worker', () => {
     expect(telegramBody.text).toContain('估值');
     expect(telegramBody.text).toContain('强势持有');
     expect(telegramBody.text).toContain('MA20');
+    expect(telegramBody.text).toContain('组合风险收益');
+    expect(telegramBody.text).toContain('夏普proxy');
+    expect(telegramBody.text).toContain('60日胜率');
     expect(telegramBody.text).toContain('测试基金A');
     expect(telegramBody.text).toContain('历史位置');
   });
