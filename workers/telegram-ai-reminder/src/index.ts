@@ -528,11 +528,20 @@ interface PredictionRecord {
   portfolioDayGainPct: number;
   topFlowThemes: string[];
   analysisPreview: string;
+  actualDate?: string;
+  actualEarnings?: number;
+  actualDirection?: '偏涨' | '偏跌' | '震荡';
+  hit?: boolean;
+  evaluatedAt?: string;
 }
 
 interface PredictionRecordsSummary {
   records: number;
-  latest?: Pick<PredictionRecord, 'date' | 'conclusion' | 'confidence' | 'dataQualityScore'>;
+  evaluatedRecords: number;
+  hitRate: number | null;
+  recentHitRate: number | null;
+  byConfidence: Array<{ confidence: PredictionRecord['confidence']; total: number; hitRate: number | null }>;
+  latest?: Pick<PredictionRecord, 'date' | 'conclusion' | 'confidence' | 'dataQualityScore' | 'actualDate' | 'actualEarnings' | 'hit'>;
   recentDistribution: Record<'偏涨' | '偏跌' | '震荡' | '不确定' | '未识别', number>;
   note: string;
 }
@@ -966,34 +975,39 @@ const isDailyEarningsPoint = (value: unknown): value is DailyEarningsPoint =>
   typeof value.earnings === 'number' &&
   Number.isFinite(value.earnings);
 
-const buildDailyEarningsTrendSummary = (raw: unknown): DailyEarningsTrendSummary | undefined => {
-  if (!isNonEmptyObject(raw)) return undefined;
-
+const collectDailyEarningsPoints = (raw: unknown): Array<{ date: string; earnings: number }> => {
+  if (!isNonEmptyObject(raw)) return [];
   const rawEntries = Object.entries(raw);
   const flatStore = rawEntries.some(([, points]) => Array.isArray(points));
   const scopeEntry = flatStore
     ? (['all', raw] as const)
     : (rawEntries.filter(([, scopeValue]) => isNonEmptyObject(scopeValue)).find(([scope]) => scope === 'all') ??
       rawEntries.find(([, scopeValue]) => isNonEmptyObject(scopeValue)));
-  if (!scopeEntry || !isNonEmptyObject(scopeEntry[1])) return undefined;
-
-  const [scope, scopeMap] = scopeEntry;
-  const entries = Object.entries(scopeMap)
-    .map(([code, points]) => [code, Array.isArray(points) ? points.filter(isDailyEarningsPoint) : []] as const)
-    .filter(([, points]) => points.length > 0);
-  if (entries.length === 0) return undefined;
+  if (!scopeEntry || !isNonEmptyObject(scopeEntry[1])) return [];
 
   const byDate = new Map<string, number>();
-  entries.forEach(([, points]) => {
-    points.forEach((point) => {
+  Object.values(scopeEntry[1]).forEach((points) => {
+    if (!Array.isArray(points)) return;
+    points.filter(isDailyEarningsPoint).forEach((point) => {
       byDate.set(point.date, (byDate.get(point.date) ?? 0) + point.earnings);
     });
   });
-
-  const recentPoints = Array.from(byDate.entries())
+  return Array.from(byDate.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .slice(-3)
     .map(([date, earnings]) => ({ date, earnings: round(earnings) }));
+};
+
+const resolveDailyEarningsScope = (raw: unknown) => {
+  if (!isNonEmptyObject(raw)) return 'default';
+  const rawEntries = Object.entries(raw);
+  if (rawEntries.some(([, points]) => Array.isArray(points))) return 'all';
+  return rawEntries.filter(([, scopeValue]) => isNonEmptyObject(scopeValue)).find(([scope]) => scope === 'all')?.[0] ??
+    rawEntries.find(([, scopeValue]) => isNonEmptyObject(scopeValue))?.[0] ??
+    'default';
+};
+
+const buildDailyEarningsTrendSummary = (raw: unknown): DailyEarningsTrendSummary | undefined => {
+  const recentPoints = collectDailyEarningsPoints(raw).slice(-3);
 
   if (recentPoints.length === 0) return undefined;
 
@@ -1009,7 +1023,7 @@ const buildDailyEarningsTrendSummary = (raw: unknown): DailyEarningsTrendSummary
         : null;
 
   return {
-    scope,
+    scope: resolveDailyEarningsScope(raw),
     latestDate: latest?.date ?? null,
     latestEarnings,
     previousDate: previous?.date ?? null,
@@ -3605,8 +3619,57 @@ const appendPredictionRecord = (
   };
 };
 
+const resolveActualDirection = (earnings: number): PredictionRecord['actualDirection'] => {
+  if (earnings > 1) return '偏涨';
+  if (earnings < -1) return '偏跌';
+  return '震荡';
+};
+
+const evaluatePredictionRecords = (state: AnalysisStatePayload, rawDailyEarnings: unknown): AnalysisStatePayload => {
+  const dailyPoints = collectDailyEarningsPoints(rawDailyEarnings);
+  if (dailyPoints.length === 0 || state.predictionRecords.length === 0) return state;
+
+  let changed = false;
+  const predictionRecords = state.predictionRecords.map((record) => {
+    if (record.actualDate) return record;
+    const actualPoint = dailyPoints.find((point) => point.date > record.date);
+    if (!actualPoint) return record;
+    const actualDirection = resolveActualDirection(actualPoint.earnings);
+    const hit =
+      record.conclusion === '偏涨' || record.conclusion === '偏跌' || record.conclusion === '震荡'
+        ? record.conclusion === actualDirection
+        : undefined;
+    changed = true;
+    return {
+      ...record,
+      actualDate: actualPoint.date,
+      actualEarnings: actualPoint.earnings,
+      actualDirection,
+      hit,
+      evaluatedAt: new Date().toISOString(),
+    };
+  });
+
+  return changed ? { ...state, updatedAt: new Date().toISOString(), predictionRecords } : state;
+};
+
+const buildHitRate = (records: PredictionRecord[]) => {
+  const evaluated = records.filter((record) => typeof record.hit === 'boolean');
+  if (evaluated.length === 0) return null;
+  return round((evaluated.filter((record) => record.hit).length / evaluated.length) * 100);
+};
+
 const buildPredictionRecordsSummary = (state: AnalysisStatePayload): PredictionRecordsSummary => {
   const records = state.predictionRecords.slice(0, MAX_PREDICTION_RECORDS);
+  const evaluatedRecords = records.filter((record) => typeof record.hit === 'boolean');
+  const byConfidence = (['高', '中', '低', '未识别'] as const).map((confidence) => {
+    const confidenceRecords = evaluatedRecords.filter((record) => record.confidence === confidence);
+    return {
+      confidence,
+      total: confidenceRecords.length,
+      hitRate: buildHitRate(confidenceRecords),
+    };
+  });
   const recentDistribution: PredictionRecordsSummary['recentDistribution'] = {
     偏涨: 0,
     偏跌: 0,
@@ -3619,18 +3682,27 @@ const buildPredictionRecordsSummary = (state: AnalysisStatePayload): PredictionR
   });
   return {
     records: records.length,
+    evaluatedRecords: evaluatedRecords.length,
+    hitRate: buildHitRate(records),
+    recentHitRate: buildHitRate(records.slice(0, 30)),
+    byConfidence,
     latest: records[0]
       ? {
           date: records[0].date,
           conclusion: records[0].conclusion,
           confidence: records[0].confidence,
           dataQualityScore: records[0].dataQualityScore,
+          actualDate: records[0].actualDate,
+          actualEarnings: records[0].actualEarnings,
+          hit: records[0].hit,
         }
       : undefined,
     recentDistribution,
     note:
-      records.length > 0
-        ? '已保存历史预测记录；当前阶段仅用于校准表达和置信度，次日命中率归因将在后续接入。'
+      evaluatedRecords.length > 0
+        ? `已结算 ${evaluatedRecords.length}/${records.length} 条预测记录，方向命中率 ${buildHitRate(records)}%。不确定结论不计入方向命中率。`
+        : records.length > 0
+          ? '已保存历史预测记录，但尚未找到预测日之后的组合每日收益，暂无法结算命中率。'
         : '暂无历史预测记录，无法基于历史命中率校准置信度。',
   };
 };
@@ -5173,7 +5245,9 @@ const buildAnalysisMessage = async (
     fetchEtfDirectionProxySnapshot(),
   ]);
   logStepDuration('读取市场/新闻/资金流', externalStartedAt);
-  const analysisState = updateFundFlowHistory(await readGistAnalysisState(env), fundFlowSnapshot);
+  const persistedAnalysisState = await readGistAnalysisState(env);
+  const evaluatedAnalysisState = evaluatePredictionRecords(persistedAnalysisState, payload.fundDailyEarnings);
+  const analysisState = updateFundFlowHistory(evaluatedAnalysisState, fundFlowSnapshot);
   const fundFlowHistorySummary = buildFundFlowHistorySummary(analysisState);
   const predictionRecordsSummary = buildPredictionRecordsSummary(analysisState);
   const heldFundCodeSet = new Set(snapshot.heldFundCodes);

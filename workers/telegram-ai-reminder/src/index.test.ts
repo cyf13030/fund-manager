@@ -1202,6 +1202,82 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('明日涨跌预测');
   });
 
+  it('会用每日收益结算历史预测并写入命中率', async () => {
+    const existingState = {
+      version: 1,
+      updatedAt: '2026-05-17T10:00:00.000Z',
+      fundFlowHistory: [],
+      predictionRecords: [
+        {
+          id: 'prediction-1',
+          createdAt: '2026-05-17T10:00:00.000Z',
+          date: '2026-05-17',
+          marketPhase: 'postClose',
+          conclusion: '偏涨',
+          confidence: '中',
+          dataQualityScore: 82,
+          portfolioDayGainPct: 0.5,
+          topFlowThemes: ['新能源'],
+          analysisPreview: '偏涨，中置信度',
+        },
+      ],
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: {
+              'fund-manager-sync.json': { content: JSON.stringify(backupPayload) },
+              'fund-manager-ai-state.json': { content: JSON.stringify(existingState) },
+            },
+          }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
+        if (url.includes('f37') || url.includes('f38')) return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
+        return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
+      }
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('chat/completions')) {
+        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '市场分析' } }] }));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '市场分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const aiBody = findAiRequestBody(fetchMock);
+    expect(aiBody.messages[0].content).toContain('hitRate');
+    const statePatchCall = fetchMock.mock.calls.find(
+      (call) => String(call[0]).includes('api.github.com/gists') && call[1]?.method === 'PATCH',
+    );
+    const statePatchBody = JSON.parse(statePatchCall?.[1].body as string) as {
+      files: Record<string, { content: string }>;
+    };
+    const statePayload = JSON.parse(statePatchBody.files['fund-manager-ai-state.json'].content) as {
+      predictionRecords: Array<{ actualDate?: string; actualEarnings?: number; hit?: boolean }>;
+    };
+    expect(statePayload.predictionRecords[0]).toMatchObject({
+      actualDate: '2026-05-18',
+      actualEarnings: 1.8,
+      hit: true,
+    });
+  });
+
   it('Telegram 短版分析会复用 Morningstar 持仓缓存', async () => {
     const customPayload = {
       ...backupPayload,
