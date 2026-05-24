@@ -937,6 +937,16 @@ const LATE_SESSION_ACTION_QUESTION =
   '请输出尾盘半小时操作提醒，控制在 1000 字以内。重点服务 14:50 前是否加仓、是否减仓、是否有建仓主题观察方向。必须结合 A 股市场情绪、资金流入最强方向、中文财经新闻利好/风险、当前持仓涨跌和投资画像。结论要明确但条件化，例如“只适合小额加仓/暂不加仓/需要小幅减仓/继续观察”。建仓主题观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合。不轻易建议清仓；如果没有明确建仓主题，必须输出“尾盘建仓主题观察”，给出观察方向、触发条件和放弃条件，不得硬写买入建议。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
 const CLOSE_ANALYSIS_QUESTION =
   '请输出收盘分析，控制在 1200 字以内。总结全天市场情绪、资金流入最强方向、中文财经新闻影响、持仓表现、今日建仓主题观察/加仓/减仓判断和后续观察点。收盘分析重点是复盘和明日触发条件，不要编造缺失数据。建仓主题观察只推荐主题方向，不输出具体基金名称或基金代码；主题可以和已有持仓重合。如果没有明确主题，必须输出“明日建仓主题观察”，给出 1-3 个观察方向、触发条件和放弃条件，不得硬写买入建议。最终回复不得出现 buildCandidates、fallbackBuildCandidates、fundFlowSnapshot、holdings 等内部字段名。';
+const BOT_FACT_DISCIPLINE_INSTRUCTION = `通用事实与数据口径纪律：
+- 缺失数据必须明确说明，不得猜测补齐；不得编造新闻、资金流、北向、ETF 申赎、市场宽度或公告。
+- 必须区分确认型数据与情绪/proxy 数据：基金官方净值、前一交易日 ETF 日线、前一交易日北向和已归档新闻属于确认型数据；当天实时指数、外围市场、A50、汇率、ETF方向 proxy、市场宽度样本和历史资金流缓存只能作为情绪或 proxy。
+- 看到 cached/历史兜底时，必须说明“使用最近一次有效数据/历史缓存”；看到 proxy 时，必须说明“替代口径”，不能写成真实资金流、真实净申购或全市场完整统计。
+- 市场宽度样本不是全市场完整家数；北向接口失败时不得输出净流入/净流出结论；ETF方向 proxy 不是 ETF 净申购。
+- 任何操作或判断都必须同时交代支持证据、风险/反向证据和信息边界。`;
+const BOT_PREDICTION_DISCIPLINE_INSTRUCTION = `预测纪律：
+- 预测只能做条件化概率判断，不得写“必涨”“必跌”“一定”。
+- 必须给出支持证据、反向证据、数据缺口、触发条件和失效条件；关键数据缺失时必须降低置信度。
+- 历史预测验证只能基于此前明确写出的短期预测，不得按当前结论倒推历史判断。`;
 const SCHEDULED_ANALYSIS_CONFIG: Record<
   ScheduledAnalysisType,
   { title: string; question: string; maxLength?: number }
@@ -5039,6 +5049,8 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
 
   return `${roleInstruction}
 要求：
+${BOT_FACT_DISCIPLINE_INSTRUCTION}
+${BOT_PREDICTION_DISCIPLINE_INSTRUCTION}
 1) 只基于“预测专用摘要”推理，不得编造摘要之外的指数、期货、新闻、资金流、北向资金或公告。
 2) 外围市场/指数期货只能作为情绪和开盘扰动参考，不能写成 A 股必然涨跌。
 3) 盘后消息面只可引用摘要中已有标题；新闻缺失或接口失败时必须说明，不得假设政策利好或利空。
@@ -5150,6 +5162,7 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
 
   return `${roleInstruction}
 要求：
+${BOT_FACT_DISCIPLINE_INSTRUCTION}
 1) 只基于“今日涨跌归因摘要”推理，不得编造摘要之外的指数、新闻、资金流或持仓表现。
 2) 必须先判断当前更偏“上涨、下跌、震荡、不确定”之一；如果市场未开盘或数据不足，必须说明判断口径并降低确定性。
 3) 解释“为什么涨/跌”时，必须同时区分市场因素、资金流因素、消息面因素、持仓暴露因素和量化/风险因素。
@@ -5234,6 +5247,7 @@ const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: strin
 
   return `${roleInstruction}
 要求：
+${BOT_FACT_DISCIPLINE_INSTRUCTION}
 1) 只基于“市场分析专用摘要”推理，不得编造摘要之外的指数、新闻、资金流或公告。
 2) 必须区分市场主线、资金流方向和当前组合底层暴露，不能把市场热题材直接说成组合已持有。
 3) 市场宽度如有个股样本，优先用上涨/下跌家数、涨跌停、平均涨跌幅和成交额判断；样本缺失时只能说明数据不足。
@@ -5334,6 +5348,7 @@ const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: s
 
   return `${roleInstruction}
 要求：
+${BOT_FACT_DISCIPLINE_INSTRUCTION}
 1) 只基于“专项操作摘要”推理，不得编造摘要之外的指数、新闻、资金流或持仓事实。
 2) ${actionRules}
 3) 必须结合 A 股市场、消息面、资金流、持仓盈亏、底层暴露、重合度、量化摘要和交易确认状态。
@@ -5377,12 +5392,13 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
   const predictionRecords = context.predictionRecordsSummary;
   const availableFundProfiles = holdings.holdings.filter((item) => item.fundProfile?.status === 'available');
 
-  const modeInstruction =
+  let modeInstruction =
     mode === 'risk'
       ? '你是一位专注风险评估的基金持仓分析助手，请优先识别回撤、集中度、单市场暴露与组合脆弱点。必须按 T+1 交易确认口径区分已确认持仓、待确认交易和待到账资金。'
       : mode === 'quick'
         ? '你是一位基金持仓分析助手，请用快速诊断方式先给关键结论，再补充依据。必须按 T+1 交易确认口径区分已确认持仓、待确认交易和待到账资金。'
         : '你是一位资深基金投顾，请从收益、配置、集中度、风险、改进建议等多个维度做深度分析。必须按 T+1 交易确认口径区分已确认持仓、待确认交易和待到账资金。';
+  modeInstruction = `${modeInstruction}\n${BOT_FACT_DISCIPLINE_INSTRUCTION}`;
 
   const summary = [
     `总资产: ${holdings.totalAssets}`,
@@ -5994,6 +6010,7 @@ const buildQuantAnalysisMessage = async (env: Env) => {
 const buildQuantInterpretationPrompt = (result: QuantAnalysisResult) => `你是一位基金组合量化分析解释助手。
 
 要求：
+${BOT_FACT_DISCIPLINE_INSTRUCTION}
 1) 只能解释“量化结构化数据”中的字段，不得新增、不猜测、不修正任何数值。
 2) 缺失字段必须说明“缺失”，不能补全。
 3) 估值只能表述为“历史净值位置 proxy”，不得说成真实 PE/PB、便宜或昂贵。

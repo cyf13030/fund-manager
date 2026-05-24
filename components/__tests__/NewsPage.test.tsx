@@ -52,13 +52,29 @@ describe('NewsPage', () => {
           items: [
             {
               tag: '政策',
-              title: '中长期资金入市相关表述增强',
-              impact: '偏正面',
-              relation: '用于筛选对市场情绪可能有影响的消息。',
+              title: '证监会发布基金销售新规',
+              impact: '影响高',
+              relation: '用于观察基金销售合规和代销渠道影响。',
               relationReason: '命中政策关键词，与组合风险偏好相关。',
               time: '16:20',
               tone: 'positive',
               url: 'https://example.com/news/1',
+            },
+            {
+              tag: '行业',
+              title: 'ETF 规模变化引发基金行业关注',
+              impact: '偏中性',
+              relation: '用于观察基金行业趋势，不等同于单只基金建议。',
+              time: '16:30',
+              tone: 'info',
+            },
+            {
+              tag: '竞品',
+              title: '蚂蚁财富上线 AI 投顾功能',
+              impact: '重要关注',
+              relation: '用于观察代销渠道和竞品服务变化。',
+              time: '16:40',
+              tone: 'warning',
             },
           ],
         },
@@ -137,6 +153,13 @@ describe('NewsPage', () => {
     await waitFor(() => expect(fetchNewsSummaryMock).toHaveBeenCalled());
     expect(screen.getByText('市场资讯')).toBeInTheDocument();
     expect(screen.getByText('资金流向')).toBeInTheDocument();
+    expect(screen.getByText('基金行业简报')).toBeInTheDocument();
+    expect(screen.getByText(/默认关注近两周/)).toBeInTheDocument();
+    expect(screen.getByText('监管政策')).toBeInTheDocument();
+    expect(screen.getByText('基金行业趋势')).toBeInTheDocument();
+    expect(screen.getByText('竞品/渠道动态')).toBeInTheDocument();
+    expect(screen.getAllByText('P0 紧急必看').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('P1 重要关注').length).toBeGreaterThan(0);
     expect(screen.getByText('资金榜单')).toBeInTheDocument();
     expect(screen.getAllByText('涨跌分布').length).toBeGreaterThan(0);
     expect(screen.getByText('上涨 / 下跌')).toBeInTheDocument();
@@ -144,7 +167,7 @@ describe('NewsPage', () => {
     expect(screen.getByText(/上涨占比 76.7%，多数样本上涨/)).toBeInTheDocument();
     expect(screen.getByText('涨停多于跌停，短线情绪偏强')).toBeInTheDocument();
     expect(screen.getByText(/资金解读：/)).toBeInTheDocument();
-    expect(screen.getByText('重点消息')).toBeInTheDocument();
+    expect(screen.queryByText('重点消息')).not.toBeInTheDocument();
     expect(screen.getByText('资讯洞察')).toBeInTheDocument();
     expect(screen.getByText('数据源状态')).toBeInTheDocument();
     expect(screen.getByText('偏强')).toBeInTheDocument();
@@ -155,7 +178,7 @@ describe('NewsPage', () => {
     expect(screen.getByText('当前筛选下暂无该类资讯。')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '盘后消息' }));
-    fireEvent.click(screen.getByRole('button', { name: /中长期资金入市相关表述增强/ }));
+    fireEvent.click(screen.getByRole('button', { name: /证监会发布基金销售新规/ }));
     expect(screen.getByText(/关联原因：/)).toBeInTheDocument();
     expect(screen.getByText('打开链接')).toBeInTheDocument();
   });

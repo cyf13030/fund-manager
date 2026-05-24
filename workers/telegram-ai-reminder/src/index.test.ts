@@ -1510,6 +1510,8 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('结论、加仓、减仓/清仓、建仓主题、风险、数据');
     expect(aiBody.messages[1].content).toContain('风险只列 1-2 个最大风险');
     expect(aiBody.messages[1].content).toContain('数据行简要标注市场、资金流、新闻、量化、底层持仓');
+    expect(aiBody.messages[0].content).toContain('通用事实与数据口径纪律');
+    expect(aiBody.messages[0].content).toContain('确认型数据与情绪/proxy 数据');
     expect(aiBody.messages[0].content).toContain('可用资产: 5000');
     expect(aiBody.messages[0].content).toContain('近3日每日收益');
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('fundf10.eastmoney.com'))).toBe(false);
@@ -1537,6 +1539,8 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('A 股市场环境、主要指数强弱');
     expect(aiBody.messages[1].content).toContain('市场情绪、指数强弱、资金流方向、消息面影响、持仓影响、今日观察主题、风险提示');
     expect(aiBody.messages[1].content).toContain('不推荐具体基金名称或基金代码');
+    expect(aiBody.messages[0].content).toContain('通用事实与数据口径纪律');
+    expect(aiBody.messages[0].content).toContain('ETF方向 proxy 不是 ETF 净申购');
     expect(aiBody.messages[0].content).toContain('市场分析专用摘要');
     expect(aiBody.messages[0].content).toContain('portfolioRelevance');
     expect(aiBody.messages[0].content).toContain('analysisDiagnostics');
@@ -1597,6 +1601,8 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[1].content).toContain('条件化概率判断');
     expect(aiBody.messages[1].content).toContain('结论、概率判断、主要依据、明天重点看什么、触发条件、失效条件、不确定项');
     expect(aiBody.messages[1].content).toContain('不得写“必涨”“必跌”“一定”');
+    expect(aiBody.messages[0].content).toContain('预测纪律');
+    expect(aiBody.messages[0].content).toContain('支持证据、反向证据、数据缺口、触发条件和失效条件');
     expect(aiBody.messages[1].content).toContain('外围市场/指数期货');
     expect(aiBody.messages[1].content).toContain('盘后消息面');
     expect(aiBody.messages[1].content).toContain('资金流连续性');

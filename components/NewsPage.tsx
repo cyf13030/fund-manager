@@ -93,6 +93,26 @@ interface MoneyFlowPanelProps {
   summary: NewsSummaryResponse;
 }
 
+type BriefingGroupKey = 'focus' | 'policy' | 'industry' | 'competitor' | 'market' | 'watch';
+
+interface BriefingItem extends NewsSummaryInsight {
+  sectionTitle: string;
+  priority: BriefingPriority;
+}
+
+interface BriefingGroup {
+  key: BriefingGroupKey;
+  title: string;
+  description: string;
+  items: BriefingItem[];
+}
+
+interface BriefingPriority {
+  label: 'P0' | 'P1' | 'P2' | 'P3';
+  text: string;
+  className: string;
+}
+
 interface MarketBreadthStats {
   upCount?: number;
   downCount?: number;
@@ -160,20 +180,102 @@ const buildPrimaryCards = (cards: NewsSummaryCard[]) => {
   );
 };
 
-const buildFocusItems = (sections: NewsSummaryResponse['sections']) => {
-  return sections
-    .flatMap((section) => section.items.map((item) => ({ ...item, sectionTitle: section.title })))
-    .filter((item) => item.relatedToPortfolio || item.tone === 'negative' || item.tone === 'warning')
-    .sort((a, b) => {
-      const score = (item: NewsSummaryInsight) =>
-        (item.relatedToPortfolio ? 4 : 0) + (item.tone === 'negative' ? 3 : item.tone === 'warning' ? 2 : 0);
-      return score(b) - score(a);
-    })
-    .slice(0, 4);
-};
-
 const getSectionItems = (sections: NewsSummaryResponse['sections'], title: string) => {
   return sections.find((section) => section.title === title)?.items ?? [];
+};
+
+const BRIEFING_GROUP_META: Record<BriefingGroupKey, Omit<BriefingGroup, 'key' | 'items'>> = {
+  focus: {
+    title: '今日焦点',
+    description: '高优先级事件，承接原重点消息，不重复展示。',
+  },
+  policy: {
+    title: '监管政策',
+    description: '证监会、中基协、央行和合规相关信息。',
+  },
+  industry: {
+    title: '基金行业趋势',
+    description: '公募、ETF、FOF、发行、费率和投顾趋势。',
+  },
+  competitor: {
+    title: '竞品/渠道动态',
+    description: '代销平台、银行、券商和互联网财富渠道。',
+  },
+  market: {
+    title: '市场行情',
+    description: '指数、成交额、跨境资金和外围扰动。',
+  },
+  watch: {
+    title: '待观察',
+    description: '信息不足或影响偏中性的后续观察项。',
+  },
+};
+
+const resolveBriefingPriority = (item: NewsSummaryInsight): BriefingPriority => {
+  const text = `${item.impact} ${item.title} ${item.relation}`;
+  if (item.tone === 'negative' || /极高|高|风险|紧急|处罚|监管/.test(text)) {
+    return {
+      label: 'P0',
+      text: '紧急必看',
+      className: 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300',
+    };
+  }
+  if (item.tone === 'warning') {
+    return {
+      label: 'P1',
+      text: '重要关注',
+      className: 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300',
+    };
+  }
+  if (item.tone === 'positive' || item.tone === 'info') {
+    return {
+      label: 'P2',
+      text: '建议了解',
+      className: 'bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300',
+    };
+  }
+  return {
+    label: 'P3',
+    text: '知悉即可',
+    className: 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-slate-300',
+  };
+};
+
+const classifyBriefingItem = (item: NewsSummaryInsight, sectionTitle: string): BriefingGroupKey => {
+  const text = `${sectionTitle} ${item.tag} ${item.title} ${item.impact} ${item.relation}`;
+  if (/证监会|中基协|央行|监管|处罚|信披|适当性|合规|政策/.test(text)) return 'policy';
+  if (/蚂蚁|天天基金|招商银行|银行|券商|代销|渠道|盈米|且慢|竞品/.test(text)) return 'competitor';
+  if (/公募|ETF|FOF|发行|规模|费率|投顾|基金公司|行业趋势/.test(text)) return 'industry';
+  if (/指数|A股|外围|成交额|北向|南向|涨跌|资金面|市场宽度/.test(text)) return 'market';
+  if (item.tone === 'negative' || item.tone === 'warning' || item.relatedToPortfolio) return 'focus';
+  return 'watch';
+};
+
+const buildIndustryBriefingGroups = (sections: NewsSummaryResponse['sections']): BriefingGroup[] => {
+  const groups = new Map<BriefingGroupKey, BriefingItem[]>();
+  const seen = new Set<string>();
+
+  sections.forEach((section) => {
+    section.items.forEach((item) => {
+      const dedupeKey = `${item.title}-${item.time}-${item.tag}`;
+      if (seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      const key = classifyBriefingItem(item, section.title);
+      const priority = resolveBriefingPriority(item);
+      groups.set(key, [...(groups.get(key) ?? []), { ...item, sectionTitle: section.title, priority }]);
+    });
+  });
+
+  const order: BriefingGroupKey[] = ['focus', 'policy', 'industry', 'competitor', 'market', 'watch'];
+  return order
+    .map((key) => {
+      const meta = BRIEFING_GROUP_META[key];
+      const items = (groups.get(key) ?? [])
+        .sort((a, b) => a.priority.label.localeCompare(b.priority.label))
+        .slice(0, 3);
+      return { key, ...meta, items };
+    })
+    .filter((group) => group.items.length > 0);
 };
 
 const parseMarketBreadthStats = (breadthItems: NewsSummaryInsight[]): MarketBreadthStats => {
@@ -370,6 +472,68 @@ const MoneyFlowPanel: React.FC<MoneyFlowPanelProps> = ({ summary }) => {
   );
 };
 
+const IndustryBriefingPanel: React.FC<{ groups: BriefingGroup[] }> = ({ groups }) => {
+  return (
+    <section className="rounded-[2rem] border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-indigo-500 dark:text-indigo-300">
+            Industry Briefing
+          </p>
+          <h2 className="mt-2 text-lg font-semibold text-slate-900 dark:text-white">基金行业简报</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+            参考行业看板的分层方式，只重组 Worker 已返回内容，默认关注近两周；缺失不补写。
+          </p>
+        </div>
+        <div className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300">
+          P0-P3 优先级
+        </div>
+      </div>
+
+      {groups.length === 0 ? (
+        <div className="mt-4 rounded-3xl border border-dashed border-slate-200/80 bg-slate-50/70 p-4 text-sm text-slate-400 dark:border-white/10 dark:bg-white/5 dark:text-slate-500">
+          暂无可重组的行业简报数据，等待 Worker 返回监管、行业或竞品信息。
+        </div>
+      ) : (
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          {groups.map((group) => (
+            <div key={group.key} className="rounded-3xl border border-slate-200/70 bg-white/70 p-4 dark:border-white/10 dark:bg-white/5">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-white">{group.title}</h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{group.description}</p>
+                </div>
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-500 dark:bg-white/5 dark:text-slate-400">
+                  {group.items.length} 条
+                </span>
+              </div>
+              <div className="space-y-3">
+                {group.items.map((item) => (
+                  <article key={`${group.key}-${item.tag}-${item.title}-${item.time}`} className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5">
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
+                      <span className={`rounded-full px-2.5 py-1 ${item.priority.className}`}>
+                        {item.priority.label} {item.priority.text}
+                      </span>
+                      <span className="rounded-full bg-white px-2.5 py-1 text-slate-500 dark:bg-white/5 dark:text-slate-400">
+                        {item.sectionTitle}
+                      </span>
+                      <span className="text-slate-400 dark:text-slate-500">{item.time}</span>
+                    </div>
+                    <h4 className="mt-2 text-sm font-semibold leading-6 text-slate-900 dark:text-white">
+                      {item.title}
+                    </h4>
+                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{item.relation}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+};
+
 const SummaryItem: React.FC<SummaryItemProps> = ({ item, isOpen, onToggle }) => {
   return (
     <article className="rounded-3xl border border-slate-200/70 bg-white/85 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
@@ -485,7 +649,7 @@ export const NewsPage: React.FC = () => {
       .filter((section) => section.items.length > 0 || activeFilter === section.title || activeFilter === 'all');
   }, [activeFilter, summary.sections]);
   const primaryCards = useMemo(() => buildPrimaryCards(summary.cards), [summary.cards]);
-  const focusItems = useMemo(() => buildFocusItems(summary.sections), [summary.sections]);
+  const briefingGroups = useMemo(() => buildIndustryBriefingGroups(summary.sections), [summary.sections]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -533,7 +697,7 @@ export const NewsPage: React.FC = () => {
                 市场资讯
               </h1>
               <p className="mt-3 text-sm leading-7 text-slate-600 dark:text-slate-300 md:text-base">
-                只看会影响持仓和明日判断的消息，不堆标题，不堆噪音。
+                聚合市场、资金、监管和基金行业信息，不堆标题，不补写缺失数据。
               </p>
             </div>
             <div className="rounded-2xl bg-white/70 px-4 py-3 text-sm text-slate-600 shadow-sm backdrop-blur dark:bg-white/5 dark:text-slate-300">
@@ -569,42 +733,9 @@ export const NewsPage: React.FC = () => {
 
         <MoneyFlowPanel summary={summary} />
 
-        <section className="rounded-[2rem] border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
-          <div className="mb-5 rounded-3xl border border-amber-100 bg-amber-50/70 p-4 dark:border-amber-500/20 dark:bg-amber-500/10">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">重点消息</h2>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  优先展示风险、需观察和持仓相关消息。
-                </p>
-              </div>
-              <div className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-white/10 dark:text-amber-300">
-                {focusItems.length} 条
-              </div>
-            </div>
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
-              {focusItems.length > 0 ? (
-                focusItems.map((item) => {
-                  const itemKey = `focus-${item.sectionTitle}-${item.tag}-${item.title}-${item.time}`;
-                  return (
-                    <SummaryItem
-                      key={itemKey}
-                      item={item}
-                      isOpen={openItemKey === itemKey}
-                      onToggle={() =>
-                        setOpenItemKey((current) => (current === itemKey ? null : itemKey))
-                      }
-                    />
-                  );
-                })
-              ) : (
-                <div className="rounded-3xl border border-dashed border-amber-200/80 bg-white/70 p-4 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-white/5 dark:text-amber-300">
-                  暂无风险或持仓相关重点消息。
-                </div>
-              )}
-            </div>
-          </div>
+        <IndustryBriefingPanel groups={briefingGroups} />
 
+        <section className="rounded-[2rem] border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white">资讯洞察</h2>
