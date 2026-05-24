@@ -2855,7 +2855,7 @@ const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnaps
 
   const fsList = ['m:0+t:6', 'm:0+t:80', 'm:0+t:81'];
   const pageSize = 100;
-  const maxPages = 80;
+  const maxPages = 3;
   const failedSources: string[] = [];
   const seen = new Map<string, { code: string; name: string; changePct: number; turnoverAmount: number }>();
 
@@ -4369,7 +4369,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       : '外围市场暂无数据',
     topFlowItem ? `资金流${topFlowItem.name}` : '资金流暂无数据',
     marketBreadthSnapshot?.sampleSize
-      ? `宽度${marketBreadthSnapshot.positiveCount}涨/${marketBreadthSnapshot.negativeCount}跌`
+      ? `宽度样本${marketBreadthSnapshot.positiveCount}涨/${marketBreadthSnapshot.negativeCount}跌`
       : '市场宽度暂无数据',
     formatNorthboundCapitalSummary(northboundCapitalSnapshot),
   ].join(' · ');
@@ -4427,7 +4427,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
           : marketStructure.breadthLabel,
       note:
         marketBreadthSnapshot?.dataStatus === 'available' || marketBreadthSnapshot?.dataStatus === 'partial'
-          ? `样本 ${marketBreadthSnapshot.sampleSize} 个，涨停 ${marketBreadthSnapshot.limitUpCount}、跌停 ${marketBreadthSnapshot.limitDownCount}，均值 ${formatPublicChangePct(marketBreadthSnapshot.averageChangePct)}，成交额 ${formatPublicMoney(marketBreadthSnapshot.turnoverAmount)}`
+          ? `涨幅榜/跌幅榜两端样本 ${marketBreadthSnapshot.sampleSize} 个，涨停 ${marketBreadthSnapshot.limitUpCount}、跌停 ${marketBreadthSnapshot.limitDownCount}，均值 ${formatPublicChangePct(marketBreadthSnapshot.averageChangePct)}，不等同全市场完整家数。`
           : marketStructure.reason,
       tone:
         (marketBreadthSnapshot?.positiveCount ?? marketStructure.positiveCount) >
@@ -4461,7 +4461,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
           : '暂无数据',
       note:
         marketBreadthSnapshot?.dataStatus === 'available' || marketBreadthSnapshot?.dataStatus === 'partial'
-          ? '基于东财个股样本成交额汇总，用于判断放量/缩量。'
+          ? '基于东财两端个股样本成交额汇总，用于辅助判断量能。'
           : '成交额样本暂不可用',
       tone: marketBreadthSnapshot && marketBreadthSnapshot.turnoverAmount > 0 ? 'info' : 'neutral',
     },
@@ -4548,7 +4548,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
     },
     {
       title: '市场宽度',
-      description: '上涨/下跌家数、涨跌停和成交额，用来识别普涨、普跌或结构行情。',
+      description: '涨幅榜/跌幅榜两端样本、涨跌停和成交额，用来辅助识别普涨、普跌或结构行情。',
       items:
         marketBreadthSnapshot?.dataStatus === 'available' || marketBreadthSnapshot?.dataStatus === 'partial'
           ? [
@@ -4561,7 +4561,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
                     : marketBreadthSnapshot.negativeCount > marketBreadthSnapshot.positiveCount
                       ? '偏负面'
                       : '中性',
-                relation: `涨停 ${marketBreadthSnapshot.limitUpCount}、跌停 ${marketBreadthSnapshot.limitDownCount}，平均涨跌 ${formatPublicChangePct(marketBreadthSnapshot.averageChangePct)}。`,
+                relation: `两端样本：涨停 ${marketBreadthSnapshot.limitUpCount}、跌停 ${marketBreadthSnapshot.limitDownCount}，平均涨跌 ${formatPublicChangePct(marketBreadthSnapshot.averageChangePct)}，不等同全市场完整家数。`,
                 time: formatPublicTime(marketBreadthSnapshot.asOf),
                 tone:
                   marketBreadthSnapshot.positiveCount > marketBreadthSnapshot.negativeCount
@@ -4574,7 +4574,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
                 tag: '成交量',
                 title: `样本成交额 ${formatPublicMoney(marketBreadthSnapshot.turnoverAmount)}`,
                 impact: '信息',
-                relation: '用于判断指数涨跌是否有量能配合；当前为东财个股样本汇总。',
+                relation: '用于辅助判断指数涨跌是否有量能配合；当前为东财两端个股样本汇总。',
                 time: formatPublicTime(marketBreadthSnapshot.asOf),
                 tone: 'info',
               },
