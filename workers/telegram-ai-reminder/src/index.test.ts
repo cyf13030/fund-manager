@@ -223,10 +223,10 @@ const eastMoneyMarketBreadthPayload = {
   data: {
     total: 4,
     diff: [
-      { f12: '000001', f14: '平安银行', f37: 1.2, f38: 1000000000 },
-      { f12: '000002', f14: '万科A', f37: -0.8, f38: 800000000 },
-      { f12: '000003', f14: '样本上涨', f37: 10.1, f38: 300000000 },
-      { f12: '000004', f14: '样本下跌', f37: -10.2, f38: 200000000 },
+      { f12: '000001', f14: '平安银行', f3: 120, f6: 1000000000 },
+      { f12: '000002', f14: '万科A', f3: -80, f6: 800000000 },
+      { f12: '000003', f14: '样本上涨', f3: 1010, f6: 300000000 },
+      { f12: '000004', f14: '样本下跌', f3: -1020, f6: 200000000 },
     ],
   },
 };
@@ -343,7 +343,7 @@ const mockBaseSuccessfulFetches = (
       return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
     }
     if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
-      if (url.includes('f37') || url.includes('f38')) {
+      if (url.includes('f3') && url.includes('f6') && url.includes('fid=f3')) {
         return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
       }
       return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
@@ -580,7 +580,7 @@ describe('telegram ai reminder worker', () => {
         return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
       }
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
-        if (url.includes('f37') || url.includes('f38')) {
+        if (url.includes('f3') && url.includes('f6') && url.includes('fid=f3')) {
           return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
         }
         return Promise.resolve(jsonResponse(eastMoneyElectronicsFundFlowPayload));
@@ -630,7 +630,7 @@ describe('telegram ai reminder worker', () => {
         return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
       }
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
-        if (url.includes('f37') || url.includes('f38')) {
+        if (url.includes('f3') && url.includes('f6') && url.includes('fid=f3')) {
           return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
         }
         return Promise.resolve(jsonResponse(emptyEastMoneyFundFlowPayload));
@@ -1634,7 +1634,7 @@ describe('telegram ai reminder worker', () => {
       if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
       if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
-        if (url.includes('f37') || url.includes('f38')) return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
+        if (url.includes('f3') && url.includes('f6') && url.includes('fid=f3')) return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
         return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
       }
       if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
@@ -1698,7 +1698,7 @@ describe('telegram ai reminder worker', () => {
       if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
       if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) return Promise.resolve(jsonResponse(eastMoneyNorthboundPayload));
       if (url.includes('push2.eastmoney.com/api/qt/clist/get')) {
-        if (url.includes('f37') || url.includes('f38')) return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
+        if (url.includes('f3') && url.includes('f6') && url.includes('fid=f3')) return Promise.resolve(jsonResponse(eastMoneyMarketBreadthPayload));
         return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
       }
       if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));

@@ -563,8 +563,8 @@ interface EastMoneyMarketBreadthResponse {
     diff?: Array<{
       f12?: string;
       f14?: string;
-      f37?: number | string;
-      f38?: number | string;
+      f3?: number | string;
+      f6?: number | string;
     }>;
   };
 }
@@ -2812,16 +2812,20 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
   }
 };
 
-const parseEastMoneyMarketBreadthItem = (item: { f12?: string; f14?: string; f37?: number | string; f38?: number | string }) => {
+const normalizeEastMoneyChangePct = (value: number) => {
+  return Math.abs(value) > 100 ? value / 100 : value;
+};
+
+const parseEastMoneyMarketBreadthItem = (item: { f12?: string; f14?: string; f3?: number | string; f6?: number | string }) => {
   const code = item.f12?.trim();
   const name = item.f14?.trim();
-  const changePct = Number(item.f37);
-  const turnoverAmount = Number(item.f38);
+  const changePct = Number(item.f3);
+  const turnoverAmount = Number(item.f6);
   if (!code || !name || !Number.isFinite(changePct) || !Number.isFinite(turnoverAmount)) return null;
   return {
     code,
     name,
-    changePct: round(changePct, 2),
+    changePct: round(normalizeEastMoneyChangePct(changePct), 2),
     turnoverAmount: round(turnoverAmount, 2),
   };
 };
@@ -2845,7 +2849,7 @@ const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnaps
         url.searchParams.set('ut', 'bd1d9ddb04089700cf9c27f6f7426281');
         url.searchParams.set('fid', 'f3');
         url.searchParams.set('fs', fs);
-        url.searchParams.set('fields', 'f12,f14,f37,f38');
+        url.searchParams.set('fields', 'f12,f14,f3,f6');
         const response = await fetchJsonWithTimeout<EastMoneyMarketBreadthResponse>(
           url.toString(),
           { headers: { Accept: 'application/json' } },
