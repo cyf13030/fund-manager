@@ -2854,15 +2854,15 @@ const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnaps
   if (cache && Date.now() - Date.parse(cache.asOf) <= 60_000) return cache;
 
   const fsList = ['m:0+t:6', 'm:0+t:80', 'm:0+t:81'];
-  const pageSize = 100;
-  const maxPages = 3;
+  const pageSize = 1000;
+  const maxPages = 1;
   const failedSources: string[] = [];
   const seen = new Map<string, { code: string; name: string; changePct: number; turnoverAmount: number }>();
 
   await Promise.all(
     fsList.map(async (fs) => {
-      try {
-        for (const sortOrder of ['desc', 'asc'] as const) {
+      for (const sortOrder of ['desc', 'asc'] as const) {
+        try {
           for (let page = 1; page <= maxPages; page += 1) {
             const response = await fetchEastMoneyMarketBreadthPage(fs, page, pageSize, sortOrder);
             const rows = response.data?.diff || [];
@@ -2874,9 +2874,9 @@ const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnaps
             const total = response.data?.total ?? 0;
             if (rows.length === 0 || page * pageSize >= total) break;
           }
+        } catch {
+          failedSources.push(`${fs}:${sortOrder}`);
         }
-      } catch {
-        failedSources.push(fs);
       }
     }),
   );

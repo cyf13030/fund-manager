@@ -538,10 +538,10 @@ describe('telegram ai reminder worker', () => {
 
     const breadthCard = body.cards.find((card) => card.title === '市场宽度');
     const breadthItem = body.sections.find((section) => section.title === '市场宽度')?.items[0];
-    expect(breadthCard?.value).toBe('2 涨 / 2 跌');
-    expect(breadthCard?.note).toContain('两端样本 4 个');
+    expect(breadthCard?.value).toBe('1 涨 / 1 跌');
+    expect(breadthCard?.note).toContain('两端样本 2 个');
     expect(breadthCard?.note).toContain('不等同全市场完整家数');
-    expect(breadthItem?.relation).toContain('两端样本：涨停 1、跌停 1');
+    expect(breadthItem?.relation).toContain('两端样本：涨停 0、跌停 0');
   });
 
   it('news-summary uses explicit northbound and southbound amounts when southbound dominates', async () => {
