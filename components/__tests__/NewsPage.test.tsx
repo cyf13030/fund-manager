@@ -25,6 +25,8 @@ describe('NewsPage', () => {
         { title: '盘后消息', value: '3 正 / 1 风险', note: '消息整体偏正面', tone: 'positive' },
         { title: '外围市场', value: '纳指 +0.80%', note: '明早开盘情绪偏稳', tone: 'info' },
         { title: '资金流', value: '半导体', note: '连续上榜 3 次', tone: 'warning' },
+        { title: '行业轮动', value: '延续', note: '强势方向连续上榜', tone: 'positive' },
+        { title: '持仓匹配', value: '中', note: '与组合有一定重合', tone: 'warning' },
       ],
       sections: [
         {
@@ -103,10 +105,12 @@ describe('NewsPage', () => {
 
     await waitFor(() => expect(fetchNewsSummaryMock).toHaveBeenCalled());
     expect(screen.getByText('市场资讯')).toBeInTheDocument();
+    expect(screen.getByText('重点消息')).toBeInTheDocument();
     expect(screen.getByText('资讯洞察')).toBeInTheDocument();
-    expect(screen.getByText('本次 AI 依据')).toBeInTheDocument();
+    expect(screen.getByText('数据源状态')).toBeInTheDocument();
     expect(screen.getByText('偏强')).toBeInTheDocument();
-    expect(screen.getByText('半导体 +1200 万元')).toBeInTheDocument();
+    expect(screen.getByText('半导体 · 延续')).toBeInTheDocument();
+    expect(screen.getAllByText('半导体 +1200 万元').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: '持仓相关' }));
     expect(screen.getByText('当前筛选下暂无该类资讯。')).toBeInTheDocument();

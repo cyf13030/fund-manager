@@ -114,6 +114,52 @@ const SummaryCard: React.FC<SummaryCardProps> = ({ card }) => {
   );
 };
 
+const getCard = (cards: NewsSummaryCard[], title: string) => cards.find((card) => card.title === title);
+
+const mergeTones = (...tones: Array<NewsSummaryTone | undefined>): NewsSummaryTone => {
+  if (tones.includes('negative')) return 'negative';
+  if (tones.includes('warning')) return 'warning';
+  if (tones.includes('positive')) return 'positive';
+  if (tones.includes('info')) return 'info';
+  return 'neutral';
+};
+
+const buildPrimaryCards = (cards: NewsSummaryCard[]) => {
+  const marketCard = getCard(cards, '市场温度');
+  const newsCard = getCard(cards, '盘后消息');
+  const fundFlowCard = getCard(cards, '资金流');
+  const rotationCard = getCard(cards, '行业轮动');
+  const portfolioCard = getCard(cards, '持仓匹配');
+  const capitalCard = getCard(cards, '资金面');
+
+  const mainFlowCard: NewsSummaryCard | undefined = fundFlowCard
+    ? {
+        title: '主线资金',
+        value: rotationCard ? `${fundFlowCard.value} · ${rotationCard.value}` : fundFlowCard.value,
+        note: rotationCard ? `${fundFlowCard.note}；${rotationCard.note}` : fundFlowCard.note,
+        tone: mergeTones(fundFlowCard.tone, rotationCard?.tone),
+      }
+    : rotationCard
+      ? { ...rotationCard, title: '主线资金' }
+      : undefined;
+
+  return [marketCard, newsCard, mainFlowCard, portfolioCard ?? capitalCard].filter(
+    (card): card is NewsSummaryCard => Boolean(card),
+  );
+};
+
+const buildFocusItems = (sections: NewsSummaryResponse['sections']) => {
+  return sections
+    .flatMap((section) => section.items.map((item) => ({ ...item, sectionTitle: section.title })))
+    .filter((item) => item.relatedToPortfolio || item.tone === 'negative' || item.tone === 'warning')
+    .sort((a, b) => {
+      const score = (item: NewsSummaryInsight) =>
+        (item.relatedToPortfolio ? 4 : 0) + (item.tone === 'negative' ? 3 : item.tone === 'warning' ? 2 : 0);
+      return score(b) - score(a);
+    })
+    .slice(0, 4);
+};
+
 const SummaryItem: React.FC<SummaryItemProps> = ({ item, isOpen, onToggle }) => {
   return (
     <article className="rounded-3xl border border-slate-200/70 bg-white/85 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
@@ -228,6 +274,8 @@ export const NewsPage: React.FC = () => {
       }))
       .filter((section) => section.items.length > 0 || activeFilter === section.title || activeFilter === 'all');
   }, [activeFilter, summary.sections]);
+  const primaryCards = useMemo(() => buildPrimaryCards(summary.cards), [summary.cards]);
+  const focusItems = useMemo(() => buildFocusItems(summary.sections), [summary.sections]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -303,13 +351,48 @@ export const NewsPage: React.FC = () => {
             {summary.summaryLine}
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {summary.cards.map((card) => (
+            {primaryCards.map((card) => (
               <SummaryCard key={card.title} card={card} />
             ))}
           </div>
         </section>
 
         <section className="rounded-[2rem] border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
+          <div className="mb-5 rounded-3xl border border-amber-100 bg-amber-50/70 p-4 dark:border-amber-500/20 dark:bg-amber-500/10">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">重点消息</h2>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  优先展示风险、需观察和持仓相关消息。
+                </p>
+              </div>
+              <div className="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-white/10 dark:text-amber-300">
+                {focusItems.length} 条
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              {focusItems.length > 0 ? (
+                focusItems.map((item) => {
+                  const itemKey = `focus-${item.sectionTitle}-${item.tag}-${item.title}-${item.time}`;
+                  return (
+                    <SummaryItem
+                      key={itemKey}
+                      item={item}
+                      isOpen={openItemKey === itemKey}
+                      onToggle={() =>
+                        setOpenItemKey((current) => (current === itemKey ? null : itemKey))
+                      }
+                    />
+                  );
+                })
+              ) : (
+                <div className="rounded-3xl border border-dashed border-amber-200/80 bg-white/70 p-4 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-white/5 dark:text-amber-300">
+                  暂无风险或持仓相关重点消息。
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white">资讯洞察</h2>
@@ -412,15 +495,18 @@ export const NewsPage: React.FC = () => {
           </div>
         </section>
 
-        <section className="rounded-[2rem] border border-slate-200/70 bg-white/80 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">本次 AI 依据</h2>
-          <div className="mt-4 grid gap-3 md:grid-cols-4">
+        <section className="rounded-[2rem] border border-slate-200/70 bg-white/70 p-5 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">数据源状态</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            用来判断本次摘要是否完整；部分数据为 proxy，仅作辅助参考。
+          </p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {summary.sourceStatus.map((item) => (
-              <div key={item.label} className="rounded-2xl bg-slate-50 p-4 dark:bg-white/5">
+              <div key={item.label} className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
                   {item.label}
                 </div>
-                <div className="mt-2 text-xl font-bold text-slate-900 dark:text-white">{item.value}</div>
+                <div className="mt-2 text-sm font-bold text-slate-900 dark:text-white">{item.value}</div>
                 <div className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${toneClasses[item.tone]}`}>
                   {item.tone === 'positive'
                     ? '可用'
