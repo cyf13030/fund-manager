@@ -26,6 +26,9 @@ describe('NewsPage', () => {
         { title: '外围市场', value: '纳指 +0.80%', note: '明早开盘情绪偏稳', tone: 'info' },
         { title: '资金流', value: '半导体', note: '连续上榜 3 次', tone: 'warning' },
         { title: '行业轮动', value: '延续', note: '强势方向连续上榜', tone: 'positive' },
+        { title: '市场宽度', value: '220 涨 / 67 跌', note: '样本 300 个', tone: 'positive' },
+        { title: '成交量', value: '+2299.79 亿', note: '基于东财个股样本成交额汇总。', tone: 'info' },
+        { title: '资金面', value: '南向占优', note: '北向+0.00 元 / 南向+420.00 万', tone: 'negative' },
         { title: '持仓匹配', value: '中', note: '与组合有一定重合', tone: 'warning' },
       ],
       sections: [
@@ -74,6 +77,34 @@ describe('NewsPage', () => {
           ],
         },
         {
+          title: '市场宽度',
+          description: '上涨/下跌家数、涨跌停和成交额。',
+          items: [
+            {
+              tag: '宽度',
+              title: '220 涨 / 67 跌',
+              impact: '偏正面',
+              relation: '涨停 26、跌停 25。',
+              time: '14:50',
+              tone: 'positive',
+            },
+          ],
+        },
+        {
+          title: '资金面',
+          description: '北向资金与 ETF 方向 proxy。',
+          items: [
+            {
+              tag: '南向',
+              title: '南向净流入 +420.00 万',
+              impact: '偏负面',
+              relation: '用于观察跨境资金风险偏好。',
+              time: '14:50',
+              tone: 'negative',
+            },
+          ],
+        },
+        {
           title: '外围市场',
           description: '美股、港股、A50、汇率等对次日开盘的扰动。',
           items: [
@@ -105,6 +136,9 @@ describe('NewsPage', () => {
 
     await waitFor(() => expect(fetchNewsSummaryMock).toHaveBeenCalled());
     expect(screen.getByText('市场资讯')).toBeInTheDocument();
+    expect(screen.getByText('资金流向')).toBeInTheDocument();
+    expect(screen.getByText('资金榜单')).toBeInTheDocument();
+    expect(screen.getByText(/资金解读：/)).toBeInTheDocument();
     expect(screen.getByText('重点消息')).toBeInTheDocument();
     expect(screen.getByText('资讯洞察')).toBeInTheDocument();
     expect(screen.getByText('数据源状态')).toBeInTheDocument();
