@@ -687,11 +687,13 @@ interface AnalysisStatePayload {
   fundFlowHistory: FundFlowHistoryEntry[];
   predictionRecords: PredictionRecord[];
   fundProfiles: Record<string, FundProfileCacheEntry>;
+  lastGoodSnapshots: LastGoodMarketSnapshots;
 }
 
 interface MarketBreadthSnapshot {
   asOf: string;
   dataStatus: 'available' | 'partial' | 'missing' | 'failed';
+  unavailableReason?: 'empty' | 'requestFailed' | 'cachedFallback';
   sampleSize: number;
   positiveCount: number;
   negativeCount: number;
@@ -708,6 +710,7 @@ interface MarketBreadthSnapshot {
 interface NorthboundCapitalSnapshot {
   asOf: string;
   dataStatus: 'available' | 'missing' | 'failed';
+  unavailableReason?: 'empty' | 'requestFailed' | 'cachedFallback';
   northboundNetIn: number;
   southboundNetIn: number;
   netDirection: 'northbound' | 'southbound' | 'balanced';
@@ -718,11 +721,19 @@ interface NorthboundCapitalSnapshot {
 interface EtfDirectionProxySnapshot {
   asOf: string;
   dataStatus: 'available' | 'missing' | 'failed';
+  unavailableReason?: 'empty' | 'requestFailed' | 'cachedFallback';
   averageChangePct: number;
   positiveCount: number;
   negativeCount: number;
   label: '偏强' | '中性' | '偏弱';
   note: string;
+}
+
+interface LastGoodMarketSnapshots {
+  fundFlowSnapshot?: FundFlowSnapshot;
+  marketBreadthSnapshot?: MarketBreadthSnapshot;
+  northboundCapitalSnapshot?: NorthboundCapitalSnapshot;
+  etfDirectionProxySnapshot?: EtfDirectionProxySnapshot;
 }
 
 interface MarketRotationSnapshot {
@@ -1081,6 +1092,8 @@ let cachedFundFlowSnapshot: FundFlowSnapshot | undefined;
 let cachedMarketBreadthSnapshot: MarketBreadthSnapshot | undefined;
 let cachedNorthboundCapitalSnapshot: NorthboundCapitalSnapshot | undefined;
 let cachedEtfDirectionProxySnapshot: EtfDirectionProxySnapshot | undefined;
+type MarketDataSourceKey = 'fundFlow' | 'marketBreadth' | 'northboundCapital' | 'etfDirectionProxy';
+const failedMarketDataSources = new Map<MarketDataSourceKey, { failedAt: number; consecutiveFailures: number; retryAfter: number }>();
 const FUND_FLOW_FALLBACK_CANDIDATES: Array<{
   keywords: string[];
   code: string;
@@ -1651,7 +1664,57 @@ const createEmptyAnalysisState = (): AnalysisStatePayload => ({
   fundFlowHistory: [],
   predictionRecords: [],
   fundProfiles: {},
+  lastGoodSnapshots: {},
 });
+
+const isUsableFundFlowSnapshot = (snapshot: FundFlowSnapshot | undefined): snapshot is FundFlowSnapshot =>
+  Boolean(
+    snapshot &&
+      snapshot.items.length > 0 &&
+      snapshot.dataStatus !== 'failed' &&
+      snapshot.unavailableReason !== 'cachedFallback',
+  );
+
+const isUsableMarketBreadthSnapshot = (snapshot: MarketBreadthSnapshot | undefined): snapshot is MarketBreadthSnapshot =>
+  Boolean(
+    snapshot &&
+      snapshot.sampleSize > 0 &&
+      (snapshot.dataStatus === 'available' || snapshot.dataStatus === 'partial') &&
+      snapshot.unavailableReason !== 'cachedFallback',
+  );
+
+const isUsableNorthboundCapitalSnapshot = (
+  snapshot: NorthboundCapitalSnapshot | undefined,
+): snapshot is NorthboundCapitalSnapshot =>
+  Boolean(
+    snapshot &&
+      snapshot.dataStatus === 'available' &&
+      snapshot.unavailableReason !== 'cachedFallback' &&
+      (snapshot.northboundNetIn !== 0 || snapshot.southboundNetIn !== 0 || snapshot.note.includes('平衡')),
+  );
+
+const isUsableEtfDirectionProxySnapshot = (
+  snapshot: EtfDirectionProxySnapshot | undefined,
+): snapshot is EtfDirectionProxySnapshot =>
+  Boolean(snapshot && snapshot.dataStatus === 'available' && snapshot.unavailableReason !== 'cachedFallback');
+
+const normalizeLastGoodSnapshots = (value: unknown): LastGoodMarketSnapshots => {
+  if (!isNonEmptyObject(value)) return {};
+  const snapshots: LastGoodMarketSnapshots = {};
+  if (isUsableFundFlowSnapshot(value.fundFlowSnapshot as FundFlowSnapshot | undefined)) {
+    snapshots.fundFlowSnapshot = value.fundFlowSnapshot as FundFlowSnapshot;
+  }
+  if (isUsableMarketBreadthSnapshot(value.marketBreadthSnapshot as MarketBreadthSnapshot | undefined)) {
+    snapshots.marketBreadthSnapshot = value.marketBreadthSnapshot as MarketBreadthSnapshot;
+  }
+  if (isUsableNorthboundCapitalSnapshot(value.northboundCapitalSnapshot as NorthboundCapitalSnapshot | undefined)) {
+    snapshots.northboundCapitalSnapshot = value.northboundCapitalSnapshot as NorthboundCapitalSnapshot;
+  }
+  if (isUsableEtfDirectionProxySnapshot(value.etfDirectionProxySnapshot as EtfDirectionProxySnapshot | undefined)) {
+    snapshots.etfDirectionProxySnapshot = value.etfDirectionProxySnapshot as EtfDirectionProxySnapshot;
+  }
+  return snapshots;
+};
 
 const isFundProfileSnapshot = (value: unknown): value is FundProfileSnapshot => {
   if (!isNonEmptyObject(value)) return false;
@@ -1702,6 +1765,7 @@ const readGistAnalysisState = async (env: Env): Promise<AnalysisStatePayload> =>
       fundFlowHistory: Array.isArray(parsed.fundFlowHistory) ? parsed.fundFlowHistory : [],
       predictionRecords: Array.isArray(parsed.predictionRecords) ? parsed.predictionRecords : [],
       fundProfiles: normalizeFundProfileCache(parsed.fundProfiles),
+      lastGoodSnapshots: normalizeLastGoodSnapshots(parsed.lastGoodSnapshots),
     };
   } catch (error) {
     console.warn('读取 AI 分析状态失败，使用空状态降级', error);
@@ -2743,6 +2807,65 @@ const buildFundFlowHistorySummary = (state: AnalysisStatePayload): FundFlowHisto
   };
 };
 
+const markMarketDataSourceFailed = (source: MarketDataSourceKey) => {
+  const previous = failedMarketDataSources.get(source);
+  const consecutiveFailures = (previous?.consecutiveFailures ?? 0) + 1;
+  failedMarketDataSources.set(source, {
+    failedAt: Date.now(),
+    consecutiveFailures,
+    retryAfter: consecutiveFailures >= 2 ? 5 * 60_000 : 2 * 60_000,
+  });
+};
+
+const markMarketDataSourceRecovered = (source: MarketDataSourceKey) => {
+  failedMarketDataSources.delete(source);
+};
+
+const isMarketDataSourceCoolingDown = (source: MarketDataSourceKey) => {
+  const status = failedMarketDataSources.get(source);
+  return Boolean(status && Date.now() - status.failedAt < status.retryAfter);
+};
+
+const markFundFlowCachedFallback = (snapshot: FundFlowSnapshot): FundFlowSnapshot => ({
+  ...snapshot,
+  dataStatus: snapshot.dataStatus === 'available' ? 'partial' : snapshot.dataStatus,
+  unavailableReason: 'cachedFallback',
+});
+
+const markMarketBreadthCachedFallback = (snapshot: MarketBreadthSnapshot): MarketBreadthSnapshot => ({
+  ...snapshot,
+  dataStatus: snapshot.dataStatus === 'available' ? 'partial' : snapshot.dataStatus,
+  unavailableReason: 'cachedFallback',
+});
+
+const markNorthboundCachedFallback = (snapshot: NorthboundCapitalSnapshot): NorthboundCapitalSnapshot => ({
+  ...snapshot,
+  unavailableReason: 'cachedFallback',
+  note: `使用最近一次有效北向/南向口径：${snapshot.note}`,
+});
+
+const markEtfDirectionCachedFallback = (snapshot: EtfDirectionProxySnapshot): EtfDirectionProxySnapshot => ({
+  ...snapshot,
+  unavailableReason: 'cachedFallback',
+  note: `使用最近一次有效 ETF 方向 proxy：${snapshot.note}`,
+});
+
+const updateLastGoodMarketSnapshots = (
+  state: AnalysisStatePayload,
+  snapshots: LastGoodMarketSnapshots,
+): AnalysisStatePayload => {
+  const next: LastGoodMarketSnapshots = { ...state.lastGoodSnapshots };
+  if (isUsableFundFlowSnapshot(snapshots.fundFlowSnapshot)) next.fundFlowSnapshot = snapshots.fundFlowSnapshot;
+  if (isUsableMarketBreadthSnapshot(snapshots.marketBreadthSnapshot)) next.marketBreadthSnapshot = snapshots.marketBreadthSnapshot;
+  if (isUsableNorthboundCapitalSnapshot(snapshots.northboundCapitalSnapshot)) {
+    next.northboundCapitalSnapshot = snapshots.northboundCapitalSnapshot;
+  }
+  if (isUsableEtfDirectionProxySnapshot(snapshots.etfDirectionProxySnapshot)) {
+    next.etfDirectionProxySnapshot = snapshots.etfDirectionProxySnapshot;
+  }
+  return { ...state, updatedAt: new Date().toISOString(), lastGoodSnapshots: next };
+};
+
 const buildCachedFundFlowSnapshotFromHistory = (state: AnalysisStatePayload): FundFlowSnapshot | undefined => {
   const latest = state.fundFlowHistory[0];
   if (!latest?.items.length) return undefined;
@@ -2771,6 +2894,9 @@ const buildCachedFundFlowSnapshotFromHistory = (state: AnalysisStatePayload): Fu
 
 const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undefined> => {
   if (!isEnabled(env.MARKET_ANALYSIS_ENABLED, true)) return undefined;
+  if (isMarketDataSourceCoolingDown('fundFlow') && cachedFundFlowSnapshot) {
+    return markFundFlowCachedFallback(cachedFundFlowSnapshot);
+  }
   const timeoutMs = Math.min(
     parsePositiveInt(env.NEWS_QUERY_TIMEOUT_MS, DEFAULT_FUND_FLOW_QUERY_TIMEOUT_MS),
     5000,
@@ -2810,6 +2936,7 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
       failedSources: failedSources.length > 0 ? failedSources : undefined,
     };
     cachedFundFlowSnapshot = snapshot;
+    markMarketDataSourceRecovered('fundFlow');
     return snapshot;
   }
 
@@ -2819,12 +2946,11 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
 
   if (rankedItems.length === 0 && failedSources.length > 0) {
     if (cachedSnapshot && isCacheFresh) {
-      return {
-        ...cachedSnapshot,
-        unavailableReason: 'cachedFallback',
-      };
+      markMarketDataSourceFailed('fundFlow');
+      return markFundFlowCachedFallback(cachedSnapshot);
     }
 
+    markMarketDataSourceFailed('fundFlow');
     return {
       asOf: new Date().toISOString(),
       provider: 'eastmoney',
@@ -2837,10 +2963,7 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
 
   if (rankedItems.length === 0) {
     if (cachedSnapshot && isCacheFresh) {
-      return {
-        ...cachedSnapshot,
-        unavailableReason: 'cachedFallback',
-      };
+      return markFundFlowCachedFallback(cachedSnapshot);
     }
 
     return {
@@ -2894,6 +3017,7 @@ const fetchEastMoneyMarketBreadthPage = async (fs: string, page: number, pageSiz
 const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnapshot | undefined> => {
   const cache = cachedMarketBreadthSnapshot;
   if (cache && Date.now() - Date.parse(cache.asOf) <= 60_000) return cache;
+  if (isMarketDataSourceCoolingDown('marketBreadth') && cache) return markMarketBreadthCachedFallback(cache);
 
   const fsList = ['m:0+t:6', 'm:0+t:80', 'm:0+t:81'];
   const pageSize = 1000;
@@ -2925,6 +3049,8 @@ const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnaps
 
   const items = Array.from(seen.values());
   if (items.length === 0) {
+    if (failedSources.length > 0) markMarketDataSourceFailed('marketBreadth');
+    if (failedSources.length > 0 && cache) return markMarketBreadthCachedFallback(cache);
     const snapshot: MarketBreadthSnapshot = {
       asOf: new Date().toISOString(),
       dataStatus: failedSources.length > 0 ? 'failed' : 'missing',
@@ -2938,9 +3064,9 @@ const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnaps
       turnoverAmount: 0,
       topAdvancers: [],
       topDecliners: [],
+      unavailableReason: failedSources.length > 0 ? 'requestFailed' : 'empty',
       failedSources: failedSources.length > 0 ? failedSources : undefined,
     };
-    cachedMarketBreadthSnapshot = snapshot;
     return snapshot;
   }
 
@@ -2974,12 +3100,14 @@ const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnaps
     failedSources: failedSources.length > 0 ? failedSources : undefined,
   };
   cachedMarketBreadthSnapshot = snapshot;
+  markMarketDataSourceRecovered('marketBreadth');
   return snapshot;
 };
 
 const fetchNorthboundCapitalSnapshot = async (): Promise<NorthboundCapitalSnapshot | undefined> => {
   const cache = cachedNorthboundCapitalSnapshot;
   if (cache && Date.now() - Date.parse(cache.asOf) <= 60_000) return cache;
+  if (isMarketDataSourceCoolingDown('northboundCapital') && cache) return markNorthboundCachedFallback(cache);
 
   try {
     const response = await fetchJsonWithTimeout<EastMoneyNorthboundResponse>(
@@ -3010,9 +3138,12 @@ const fetchNorthboundCapitalSnapshot = async (): Promise<NorthboundCapitalSnapsh
             : '北向与南向资金基本平衡',
     };
     cachedNorthboundCapitalSnapshot = snapshot;
+    markMarketDataSourceRecovered('northboundCapital');
     return snapshot;
   } catch (error) {
     console.warn('读取北向资金失败', error);
+    markMarketDataSourceFailed('northboundCapital');
+    if (cache) return markNorthboundCachedFallback(cache);
     const snapshot: NorthboundCapitalSnapshot = {
       asOf: new Date().toISOString(),
       dataStatus: 'failed',
@@ -3020,9 +3151,9 @@ const fetchNorthboundCapitalSnapshot = async (): Promise<NorthboundCapitalSnapsh
       southboundNetIn: 0,
       netDirection: 'balanced',
       note: '北向资金接口暂不可用',
+      unavailableReason: 'requestFailed',
       failedSources: ['eastmoney-northbound'],
     };
-    cachedNorthboundCapitalSnapshot = snapshot;
     return snapshot;
   }
 };
@@ -3030,6 +3161,7 @@ const fetchNorthboundCapitalSnapshot = async (): Promise<NorthboundCapitalSnapsh
 const fetchEtfDirectionProxySnapshot = async (): Promise<EtfDirectionProxySnapshot | undefined> => {
   const cache = cachedEtfDirectionProxySnapshot;
   if (cache && Date.now() - Date.parse(cache.asOf) <= 60_000) return cache;
+  if (isMarketDataSourceCoolingDown('etfDirectionProxy') && cache) return markEtfDirectionCachedFallback(cache);
 
   try {
     const codes = ['sh510050', 'sh510300', 'sh510500', 'sh588000', 'sz159915'];
@@ -3038,6 +3170,7 @@ const fetchEtfDirectionProxySnapshot = async (): Promise<EtfDirectionProxySnapsh
       .map((code) => quotes[code]?.changePct)
       .filter((changePct): changePct is number => Number.isFinite(changePct));
     if (changes.length === 0) {
+      if (cache) return markEtfDirectionCachedFallback(cache);
       const snapshot: EtfDirectionProxySnapshot = {
         asOf: new Date().toISOString(),
         dataStatus: 'missing',
@@ -3046,8 +3179,8 @@ const fetchEtfDirectionProxySnapshot = async (): Promise<EtfDirectionProxySnapsh
         negativeCount: 0,
         label: '中性',
         note: 'ETF 方向 proxy 暂不可用',
+        unavailableReason: 'empty',
       };
-      cachedEtfDirectionProxySnapshot = snapshot;
       return snapshot;
     }
 
@@ -3070,9 +3203,12 @@ const fetchEtfDirectionProxySnapshot = async (): Promise<EtfDirectionProxySnapsh
       note: `ETF 方向 proxy 均值 ${formatPublicChangePct(averageChangePct)}，用于辅助判断风险偏好，不等同于净申购。`,
     };
     cachedEtfDirectionProxySnapshot = snapshot;
+    markMarketDataSourceRecovered('etfDirectionProxy');
     return snapshot;
   } catch (error) {
     console.warn('读取 ETF 方向 proxy 失败', error);
+    markMarketDataSourceFailed('etfDirectionProxy');
+    if (cache) return markEtfDirectionCachedFallback(cache);
     const snapshot: EtfDirectionProxySnapshot = {
       asOf: new Date().toISOString(),
       dataStatus: 'failed',
@@ -3081,8 +3217,8 @@ const fetchEtfDirectionProxySnapshot = async (): Promise<EtfDirectionProxySnapsh
       negativeCount: 0,
       label: '中性',
       note: 'ETF 方向 proxy 暂不可用',
+      unavailableReason: 'requestFailed',
     };
-    cachedEtfDirectionProxySnapshot = snapshot;
     return snapshot;
   }
 };
@@ -4379,7 +4515,38 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
   });
   const analysisState = await readGistAnalysisState(env);
   const effectiveFundFlowSnapshot =
-    fundFlowSnapshot?.items.length ? fundFlowSnapshot : buildCachedFundFlowSnapshotFromHistory(analysisState) ?? fundFlowSnapshot;
+    fundFlowSnapshot?.items.length
+      ? fundFlowSnapshot
+      : analysisState.lastGoodSnapshots.fundFlowSnapshot
+        ? markFundFlowCachedFallback(analysisState.lastGoodSnapshots.fundFlowSnapshot)
+        : buildCachedFundFlowSnapshotFromHistory(analysisState) ?? fundFlowSnapshot;
+  const effectiveMarketBreadthSnapshot =
+    isUsableMarketBreadthSnapshot(marketBreadthSnapshot) || marketBreadthSnapshot?.unavailableReason === 'cachedFallback'
+      ? marketBreadthSnapshot
+      : analysisState.lastGoodSnapshots.marketBreadthSnapshot
+        ? markMarketBreadthCachedFallback(analysisState.lastGoodSnapshots.marketBreadthSnapshot)
+        : marketBreadthSnapshot;
+  const effectiveNorthboundCapitalSnapshot =
+    isUsableNorthboundCapitalSnapshot(northboundCapitalSnapshot) || northboundCapitalSnapshot?.unavailableReason === 'cachedFallback'
+      ? northboundCapitalSnapshot
+      : analysisState.lastGoodSnapshots.northboundCapitalSnapshot
+        ? markNorthboundCachedFallback(analysisState.lastGoodSnapshots.northboundCapitalSnapshot)
+        : northboundCapitalSnapshot;
+  const effectiveEtfDirectionProxySnapshot =
+    isUsableEtfDirectionProxySnapshot(etfDirectionProxySnapshot) || etfDirectionProxySnapshot?.unavailableReason === 'cachedFallback'
+      ? etfDirectionProxySnapshot
+      : analysisState.lastGoodSnapshots.etfDirectionProxySnapshot
+        ? markEtfDirectionCachedFallback(analysisState.lastGoodSnapshots.etfDirectionProxySnapshot)
+        : etfDirectionProxySnapshot;
+  await writeGistAnalysisState(
+    env,
+    updateLastGoodMarketSnapshots(analysisState, {
+      fundFlowSnapshot: effectiveFundFlowSnapshot,
+      marketBreadthSnapshot: effectiveMarketBreadthSnapshot,
+      northboundCapitalSnapshot: effectiveNorthboundCapitalSnapshot,
+      etfDirectionProxySnapshot: effectiveEtfDirectionProxySnapshot,
+    }),
+  );
   const portfolioKeywords = buildPortfolioNewsKeywords(holdingsSnapshot);
 
   const marketIndices = marketSnapshot?.indices ?? [];
@@ -4413,10 +4580,10 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       ? `外围${resolvePublicMarketName(overseasItems[0].code, overseasItems[0].name)}${formatPublicChangePct(overseasItems[0].changePct)}`
       : '外围市场暂无数据',
     topFlowItem ? `资金流${topFlowItem.name}` : '资金流暂无数据',
-    marketBreadthSnapshot?.sampleSize
-      ? `宽度样本${marketBreadthSnapshot.positiveCount}涨/${marketBreadthSnapshot.negativeCount}跌`
+    effectiveMarketBreadthSnapshot?.sampleSize
+      ? `宽度样本${effectiveMarketBreadthSnapshot.positiveCount}涨/${effectiveMarketBreadthSnapshot.negativeCount}跌`
       : '市场宽度暂无数据',
-    formatNorthboundCapitalSummary(northboundCapitalSnapshot),
+    formatNorthboundCapitalSummary(effectiveNorthboundCapitalSnapshot),
   ].join(' · ');
 
   const cards: PublicNewsSummaryCard[] = [
@@ -4467,19 +4634,19 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
     {
       title: '市场宽度',
       value:
-        marketBreadthSnapshot?.dataStatus === 'available' || marketBreadthSnapshot?.dataStatus === 'partial'
-          ? `${marketBreadthSnapshot.positiveCount} 涨 / ${marketBreadthSnapshot.negativeCount} 跌`
+        effectiveMarketBreadthSnapshot?.dataStatus === 'available' || effectiveMarketBreadthSnapshot?.dataStatus === 'partial'
+          ? `${effectiveMarketBreadthSnapshot.positiveCount} 涨 / ${effectiveMarketBreadthSnapshot.negativeCount} 跌`
           : marketStructure.breadthLabel,
       note:
-        marketBreadthSnapshot?.dataStatus === 'available' || marketBreadthSnapshot?.dataStatus === 'partial'
-          ? `涨幅榜/跌幅榜两端样本 ${marketBreadthSnapshot.sampleSize} 个，涨停 ${marketBreadthSnapshot.limitUpCount}、跌停 ${marketBreadthSnapshot.limitDownCount}，均值 ${formatPublicChangePct(marketBreadthSnapshot.averageChangePct)}，不等同全市场完整家数。`
+        effectiveMarketBreadthSnapshot?.dataStatus === 'available' || effectiveMarketBreadthSnapshot?.dataStatus === 'partial'
+          ? `${effectiveMarketBreadthSnapshot.unavailableReason === 'cachedFallback' ? '使用最近一次有效两端样本；' : ''}涨幅榜/跌幅榜两端样本 ${effectiveMarketBreadthSnapshot.sampleSize} 个，涨停 ${effectiveMarketBreadthSnapshot.limitUpCount}、跌停 ${effectiveMarketBreadthSnapshot.limitDownCount}，均值 ${formatPublicChangePct(effectiveMarketBreadthSnapshot.averageChangePct)}，不等同全市场完整家数。`
           : marketStructure.reason,
       tone:
-        (marketBreadthSnapshot?.positiveCount ?? marketStructure.positiveCount) >
-        (marketBreadthSnapshot?.negativeCount ?? marketStructure.negativeCount)
+        (effectiveMarketBreadthSnapshot?.positiveCount ?? marketStructure.positiveCount) >
+        (effectiveMarketBreadthSnapshot?.negativeCount ?? marketStructure.negativeCount)
           ? 'positive'
-          : (marketBreadthSnapshot?.negativeCount ?? marketStructure.negativeCount) >
-              (marketBreadthSnapshot?.positiveCount ?? marketStructure.positiveCount)
+          : (effectiveMarketBreadthSnapshot?.negativeCount ?? marketStructure.negativeCount) >
+              (effectiveMarketBreadthSnapshot?.positiveCount ?? marketStructure.positiveCount)
             ? 'negative'
             : marketStructure.breadthLabel === '缺失'
               ? 'neutral'
@@ -4501,33 +4668,33 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
     {
       title: '成交量',
       value:
-        marketBreadthSnapshot?.dataStatus === 'available' || marketBreadthSnapshot?.dataStatus === 'partial'
-          ? formatPublicMoney(marketBreadthSnapshot.turnoverAmount)
+        effectiveMarketBreadthSnapshot?.dataStatus === 'available' || effectiveMarketBreadthSnapshot?.dataStatus === 'partial'
+          ? formatPublicMoney(effectiveMarketBreadthSnapshot.turnoverAmount)
           : '暂无数据',
       note:
-        marketBreadthSnapshot?.dataStatus === 'available' || marketBreadthSnapshot?.dataStatus === 'partial'
-          ? '基于东财两端个股样本成交额汇总，用于辅助判断量能。'
+        effectiveMarketBreadthSnapshot?.dataStatus === 'available' || effectiveMarketBreadthSnapshot?.dataStatus === 'partial'
+          ? `${effectiveMarketBreadthSnapshot.unavailableReason === 'cachedFallback' ? '使用最近一次有效成交额样本；' : ''}基于东财两端个股样本成交额汇总，用于辅助判断量能。`
           : '成交额样本暂不可用',
-      tone: marketBreadthSnapshot && marketBreadthSnapshot.turnoverAmount > 0 ? 'info' : 'neutral',
+      tone: effectiveMarketBreadthSnapshot && effectiveMarketBreadthSnapshot.turnoverAmount > 0 ? 'info' : 'neutral',
     },
     {
       title: '资金面',
       value:
-        northboundCapitalSnapshot?.dataStatus === 'available'
-          ? northboundCapitalSnapshot.netDirection === 'northbound'
+        effectiveNorthboundCapitalSnapshot?.dataStatus === 'available'
+          ? effectiveNorthboundCapitalSnapshot.netDirection === 'northbound'
             ? '北向占优'
-            : northboundCapitalSnapshot.netDirection === 'southbound'
+            : effectiveNorthboundCapitalSnapshot.netDirection === 'southbound'
               ? '南向占优'
               : '均衡'
           : '暂无数据',
       note:
-        northboundCapitalSnapshot?.dataStatus === 'available'
-          ? `${formatNorthboundCapitalSummary(northboundCapitalSnapshot)}；${northboundCapitalSnapshot.note}；ETF方向 proxy：${etfDirectionProxySnapshot?.label ?? '中性'}，不等同于净申购。`
-          : northboundCapitalSnapshot?.note ?? '北向资金暂不可用',
+        effectiveNorthboundCapitalSnapshot?.dataStatus === 'available'
+          ? `${formatNorthboundCapitalSummary(effectiveNorthboundCapitalSnapshot)}；${effectiveNorthboundCapitalSnapshot.note}；ETF方向 proxy：${effectiveEtfDirectionProxySnapshot?.label ?? '中性'}，不等同于净申购。`
+          : effectiveNorthboundCapitalSnapshot?.note ?? '北向资金暂不可用',
       tone:
-        northboundCapitalSnapshot?.netDirection === 'northbound'
+        effectiveNorthboundCapitalSnapshot?.netDirection === 'northbound'
           ? 'positive'
-          : northboundCapitalSnapshot?.netDirection === 'southbound'
+          : effectiveNorthboundCapitalSnapshot?.netDirection === 'southbound'
             ? 'negative'
             : 'neutral',
     },
@@ -4595,32 +4762,32 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       title: '市场宽度',
       description: '涨幅榜/跌幅榜两端样本、涨跌停和成交额，用来辅助识别普涨、普跌或结构行情。',
       items:
-        marketBreadthSnapshot?.dataStatus === 'available' || marketBreadthSnapshot?.dataStatus === 'partial'
+        effectiveMarketBreadthSnapshot?.dataStatus === 'available' || effectiveMarketBreadthSnapshot?.dataStatus === 'partial'
           ? [
               {
-                tag: '宽度',
-                title: `${marketBreadthSnapshot.positiveCount} 涨 / ${marketBreadthSnapshot.negativeCount} 跌`,
+                tag: effectiveMarketBreadthSnapshot.unavailableReason === 'cachedFallback' ? '缓存宽度' : '宽度',
+                title: `${effectiveMarketBreadthSnapshot.positiveCount} 涨 / ${effectiveMarketBreadthSnapshot.negativeCount} 跌`,
                 impact:
-                  marketBreadthSnapshot.positiveCount > marketBreadthSnapshot.negativeCount
+                  effectiveMarketBreadthSnapshot.positiveCount > effectiveMarketBreadthSnapshot.negativeCount
                     ? '偏正面'
-                    : marketBreadthSnapshot.negativeCount > marketBreadthSnapshot.positiveCount
+                    : effectiveMarketBreadthSnapshot.negativeCount > effectiveMarketBreadthSnapshot.positiveCount
                       ? '偏负面'
                       : '中性',
-                relation: `两端样本：涨停 ${marketBreadthSnapshot.limitUpCount}、跌停 ${marketBreadthSnapshot.limitDownCount}，平均涨跌 ${formatPublicChangePct(marketBreadthSnapshot.averageChangePct)}，不等同全市场完整家数。`,
-                time: formatPublicTime(marketBreadthSnapshot.asOf),
+                relation: `${effectiveMarketBreadthSnapshot.unavailableReason === 'cachedFallback' ? '使用最近一次有效两端样本；' : ''}两端样本：涨停 ${effectiveMarketBreadthSnapshot.limitUpCount}、跌停 ${effectiveMarketBreadthSnapshot.limitDownCount}，平均涨跌 ${formatPublicChangePct(effectiveMarketBreadthSnapshot.averageChangePct)}，不等同全市场完整家数。`,
+                time: formatPublicTime(effectiveMarketBreadthSnapshot.asOf),
                 tone:
-                  marketBreadthSnapshot.positiveCount > marketBreadthSnapshot.negativeCount
+                  effectiveMarketBreadthSnapshot.positiveCount > effectiveMarketBreadthSnapshot.negativeCount
                     ? 'positive'
-                    : marketBreadthSnapshot.negativeCount > marketBreadthSnapshot.positiveCount
+                    : effectiveMarketBreadthSnapshot.negativeCount > effectiveMarketBreadthSnapshot.positiveCount
                       ? 'negative'
                       : 'neutral',
               },
               {
                 tag: '成交量',
-                title: `样本成交额 ${formatPublicMoney(marketBreadthSnapshot.turnoverAmount)}`,
+                title: `样本成交额 ${formatPublicMoney(effectiveMarketBreadthSnapshot.turnoverAmount)}`,
                 impact: '信息',
-                relation: '用于辅助判断指数涨跌是否有量能配合；当前为东财两端个股样本汇总。',
-                time: formatPublicTime(marketBreadthSnapshot.asOf),
+                relation: `${effectiveMarketBreadthSnapshot.unavailableReason === 'cachedFallback' ? '使用最近一次有效成交额样本；' : ''}用于辅助判断指数涨跌是否有量能配合；当前为东财两端个股样本汇总。`,
+                time: formatPublicTime(effectiveMarketBreadthSnapshot.asOf),
                 tone: 'info',
               },
             ]
@@ -4630,40 +4797,43 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
       title: '资金面',
       description: '北向资金与 ETF 方向 proxy，用来判断增量资金风险偏好。',
       items: [
-        ...(northboundCapitalSnapshot?.dataStatus === 'available'
+        ...(effectiveNorthboundCapitalSnapshot?.dataStatus === 'available'
           ? [
               {
-                tag: resolveCapitalFlowTag(northboundCapitalSnapshot),
-                title: northboundCapitalSnapshot.note,
+                tag:
+                  effectiveNorthboundCapitalSnapshot.unavailableReason === 'cachedFallback'
+                    ? '缓存资金'
+                    : resolveCapitalFlowTag(effectiveNorthboundCapitalSnapshot),
+                title: effectiveNorthboundCapitalSnapshot.note,
                 impact:
-                  northboundCapitalSnapshot.netDirection === 'northbound'
+                  effectiveNorthboundCapitalSnapshot.netDirection === 'northbound'
                     ? '偏正面'
-                    : northboundCapitalSnapshot.netDirection === 'southbound'
+                    : effectiveNorthboundCapitalSnapshot.netDirection === 'southbound'
                       ? '偏负面'
                       : '中性',
-                relation: '用于观察外资/跨境资金风险偏好。',
-                time: formatPublicTime(northboundCapitalSnapshot.asOf),
+                relation: `${effectiveNorthboundCapitalSnapshot.unavailableReason === 'cachedFallback' ? '使用最近一次有效北向/南向口径；' : ''}用于观察外资/跨境资金风险偏好。`,
+                time: formatPublicTime(effectiveNorthboundCapitalSnapshot.asOf),
                 tone:
-                  northboundCapitalSnapshot.netDirection === 'northbound'
+                  effectiveNorthboundCapitalSnapshot.netDirection === 'northbound'
                     ? 'positive'
-                    : northboundCapitalSnapshot.netDirection === 'southbound'
+                    : effectiveNorthboundCapitalSnapshot.netDirection === 'southbound'
                       ? 'negative'
                       : 'neutral',
               },
             ]
           : []),
-        ...(etfDirectionProxySnapshot?.dataStatus === 'available'
+        ...(effectiveEtfDirectionProxySnapshot?.dataStatus === 'available'
           ? [
               {
-                tag: 'ETF proxy',
-                title: etfDirectionProxySnapshot.note,
-                impact: etfDirectionProxySnapshot.label,
+                tag: effectiveEtfDirectionProxySnapshot.unavailableReason === 'cachedFallback' ? '缓存 ETF proxy' : 'ETF proxy',
+                title: effectiveEtfDirectionProxySnapshot.note,
+                impact: effectiveEtfDirectionProxySnapshot.label,
                 relation: '这是代表 ETF 的价格方向 proxy，不等同于 ETF 净申购。',
-                time: formatPublicTime(etfDirectionProxySnapshot.asOf),
+                time: formatPublicTime(effectiveEtfDirectionProxySnapshot.asOf),
                 tone:
-                  etfDirectionProxySnapshot.label === '偏强'
+                  effectiveEtfDirectionProxySnapshot.label === '偏强'
                     ? 'positive'
-                    : etfDirectionProxySnapshot.label === '偏弱'
+                    : effectiveEtfDirectionProxySnapshot.label === '偏弱'
                       ? 'negative'
                       : 'neutral',
               },
@@ -4715,23 +4885,33 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
     },
     {
       label: '市场宽度',
-      value: marketBreadthSnapshot?.dataStatus ?? 'missing',
+      value:
+        effectiveMarketBreadthSnapshot?.unavailableReason === 'cachedFallback'
+          ? 'cached'
+          : effectiveMarketBreadthSnapshot?.dataStatus ?? 'missing',
       tone:
-        marketBreadthSnapshot?.dataStatus === 'available'
+        effectiveMarketBreadthSnapshot?.unavailableReason === 'cachedFallback'
+          ? 'warning'
+          : effectiveMarketBreadthSnapshot?.dataStatus === 'available'
           ? 'positive'
-          : marketBreadthSnapshot?.dataStatus === 'partial'
+          : effectiveMarketBreadthSnapshot?.dataStatus === 'partial'
             ? 'warning'
-            : marketBreadthSnapshot?.dataStatus === 'failed'
+            : effectiveMarketBreadthSnapshot?.dataStatus === 'failed'
               ? 'negative'
               : 'neutral',
     },
     {
       label: '北向资金',
-      value: northboundCapitalSnapshot?.dataStatus ?? 'missing',
+      value:
+        effectiveNorthboundCapitalSnapshot?.unavailableReason === 'cachedFallback'
+          ? 'cached'
+          : effectiveNorthboundCapitalSnapshot?.dataStatus ?? 'missing',
       tone:
-        northboundCapitalSnapshot?.dataStatus === 'available'
+        effectiveNorthboundCapitalSnapshot?.unavailableReason === 'cachedFallback'
+          ? 'warning'
+          : effectiveNorthboundCapitalSnapshot?.dataStatus === 'available'
           ? 'positive'
-          : northboundCapitalSnapshot?.dataStatus === 'failed'
+          : effectiveNorthboundCapitalSnapshot?.dataStatus === 'failed'
             ? 'negative'
             : 'neutral',
     },
@@ -6104,7 +6284,12 @@ const buildAnalysisMessage = async (
   logStepDuration('读取市场/新闻/资金流', externalStartedAt);
   const evaluatedAnalysisState = evaluatePredictionRecords(persistedAnalysisState, payload.fundDailyEarnings);
   const analysisState = updateFundProfileCache(
-    updateFundFlowHistory(evaluatedAnalysisState, fundFlowSnapshot),
+    updateLastGoodMarketSnapshots(updateFundFlowHistory(evaluatedAnalysisState, fundFlowSnapshot), {
+      fundFlowSnapshot,
+      marketBreadthSnapshot,
+      northboundCapitalSnapshot,
+      etfDirectionProxySnapshot,
+    }),
     fundProfileCacheUpdates,
   );
   const fundFlowHistorySummary = buildFundFlowHistorySummary(analysisState);
@@ -6728,4 +6913,5 @@ export const __resetTelegramAiReminderStateForTests = () => {
   cachedMarketBreadthSnapshot = undefined;
   cachedNorthboundCapitalSnapshot = undefined;
   cachedEtfDirectionProxySnapshot = undefined;
+  failedMarketDataSources.clear();
 };

@@ -75,4 +75,73 @@ describe('newsSummary', () => {
     expect(summary?.cards[0].title).toBe('资金流');
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
+
+  it('不持久化市场宽度失败且 section 为空的短暂异常摘要', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          generatedAt: '2026-05-21T09:30:00.000Z',
+          cards: [{ title: '市场宽度', value: '暂无数据', note: '测试', tone: 'neutral' }],
+          sections: [{ title: '市场宽度', description: '测试', items: [] }],
+          sourceStatus: [{ label: '市场宽度', value: 'failed', tone: 'negative' }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const summary = await fetchNewsSummary(true);
+
+    expect(summary?.cards[0].title).toBe('市场宽度');
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('不持久化北向资金失败且资金面 section 为空的短暂异常摘要', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          generatedAt: '2026-05-21T09:30:00.000Z',
+          cards: [{ title: '资金面', value: '暂无数据', note: '测试', tone: 'neutral' }],
+          sections: [{ title: '资金面', description: '测试', items: [] }],
+          sourceStatus: [{ label: '北向资金', value: 'failed', tone: 'negative' }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const summary = await fetchNewsSummary(true);
+
+    expect(summary?.cards[0].title).toBe('资金面');
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('允许持久化 cached 摘要，保留最近有效数据', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          generatedAt: '2026-05-21T09:30:00.000Z',
+          cards: [{ title: '市场宽度', value: '10 涨 / 8 跌', note: '缓存样本', tone: 'warning' }],
+          sections: [
+            {
+              title: '市场宽度',
+              description: '测试',
+              items: [{ tag: '缓存宽度', title: '10 涨 / 8 跌', impact: '中性', relation: '测试', time: '09:30', tone: 'warning' }],
+            },
+          ],
+          sourceStatus: [{ label: '市场宽度', value: 'cached', tone: 'warning' }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const summary = await fetchNewsSummary(true);
+
+    expect(summary?.sourceStatus[0].value).toBe('cached');
+    expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull();
+  });
 });

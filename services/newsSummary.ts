@@ -174,9 +174,11 @@ const getSourceStatusValue = (summary: NewsSummaryResponse, label: string) => {
 const shouldPersistNewsSummary = (summary: NewsSummaryResponse) => {
   const fundFlowFailed = getSourceStatusValue(summary, '资金流') === 'failed';
   const marketBreadthFailed = getSourceStatusValue(summary, '市场宽度') === 'failed';
+  const northboundFailed = getSourceStatusValue(summary, '北向资金') === 'failed';
 
   if (fundFlowFailed && !hasSectionItems(summary, '资金流')) return false;
   if (marketBreadthFailed && !hasSectionItems(summary, '市场宽度')) return false;
+  if (northboundFailed && !hasSectionItems(summary, '资金面')) return false;
 
   return true;
 };

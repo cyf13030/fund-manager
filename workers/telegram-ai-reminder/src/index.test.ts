@@ -452,6 +452,7 @@ const buildSignedQqRequest = async (body: unknown, secret = qqEnv.QQ_OFFICIAL_AP
 
 describe('telegram ai reminder worker', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     __resetTelegramAiReminderStateForTests();
   });
@@ -717,6 +718,58 @@ describe('telegram ai reminder worker', () => {
     expect(fundFlowCard?.value).not.toBe('暂无数据');
     expect(fundFlowCard?.note).toContain('沿用最近可用主力方向');
     expect(body.sourceStatus.find((item) => item.label === '资金流')?.value).toBe('cached');
+  });
+
+  it('市场宽度和资金面失败时会沿用最近有效快照并标记 cached', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-05-21T02:00:00.000Z'));
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    vi.setSystemTime(new Date('2026-05-21T02:02:00.000Z'));
+
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: {
+              'fund-manager-sync.json': {
+                content: JSON.stringify(backupPayload),
+              },
+            },
+          }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('query1.finance.yahoo.com')) return Promise.resolve(jsonResponse(yahooChartPayload));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) return Promise.reject(new Error('northbound failed'));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get') && url.includes('fid=f3')) {
+        return Promise.reject(new Error('breadth failed'));
+      }
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) return Promise.resolve(jsonResponse(eastMoneyFundFlowPayload));
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const response = await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    const body = (await response.json()) as {
+      cards: Array<{ title: string; value: string; note: string }>;
+      sections: Array<{ title: string; items: Array<{ tag: string; relation: string }> }>;
+      sourceStatus: Array<{ label: string; value: string }>;
+    };
+
+    expect(body.sourceStatus.find((item) => item.label === '市场宽度')?.value).toBe('cached');
+    expect(body.sourceStatus.find((item) => item.label === '北向资金')?.value).toBe('cached');
+    expect(body.cards.find((card) => card.title === '市场宽度')?.note).toContain('使用最近一次有效两端样本');
+    expect(body.cards.find((card) => card.title === '资金面')?.note).toContain('使用最近一次有效北向/南向口径');
+    expect(body.sections.find((section) => section.title === '市场宽度')?.items[0].tag).toBe('缓存宽度');
+    expect(body.sections.find((section) => section.title === '资金面')?.items[0].tag).toBe('缓存资金');
   });
 
   it('读取 Gist 持仓、调用 AI 并发送 Telegram', async () => {
