@@ -93,6 +93,14 @@ interface MoneyFlowPanelProps {
   summary: NewsSummaryResponse;
 }
 
+interface MarketBreadthStats {
+  upCount?: number;
+  downCount?: number;
+  limitUpCount?: number;
+  limitDownCount?: number;
+  upRatio?: number;
+}
+
 const SummaryCard: React.FC<SummaryCardProps> = ({ card }) => {
   return (
     <div className="rounded-3xl border border-white/60 bg-white/80 p-4 shadow-sm backdrop-blur dark:border-white/10 dark:bg-white/5">
@@ -168,6 +176,69 @@ const getSectionItems = (sections: NewsSummaryResponse['sections'], title: strin
   return sections.find((section) => section.title === title)?.items ?? [];
 };
 
+const parseMarketBreadthStats = (breadthItems: NewsSummaryInsight[]): MarketBreadthStats => {
+  const breadthText = breadthItems.map((item) => `${item.title} ${item.relation}`).join(' ');
+  const upDownMatch = breadthText.match(/([\d,]+)\s*涨\s*\/\s*([\d,]+)\s*跌/);
+  const limitMatch = breadthText.match(/涨停\s*([\d,]+).*?跌停\s*([\d,]+)/);
+  const parseCount = (value: string | undefined) => {
+    const parsed = Number(value?.replace(/,/g, ''));
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+  const upCount = parseCount(upDownMatch?.[1]);
+  const downCount = parseCount(upDownMatch?.[2]);
+  const totalCount = (upCount ?? 0) + (downCount ?? 0);
+
+  return {
+    upCount,
+    downCount,
+    limitUpCount: parseCount(limitMatch?.[1]),
+    limitDownCount: parseCount(limitMatch?.[2]),
+    upRatio: totalCount > 0 && upCount !== undefined ? Math.round((upCount / totalCount) * 1000) / 10 : undefined,
+  };
+};
+
+const AShareBreadthCard: React.FC<{ stats: MarketBreadthStats }> = ({ stats }) => {
+  if (stats.upCount === undefined || stats.downCount === undefined) return null;
+  const distributionLabel =
+    stats.upRatio === undefined
+      ? '涨跌分布数据可用'
+      : stats.upRatio >= 65
+        ? '多数样本上涨'
+        : stats.upRatio <= 45
+          ? '多数样本下跌'
+          : '涨跌分布较均衡';
+  return (
+    <div className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5">
+      <div className="text-xs font-semibold text-slate-400">上涨 / 下跌</div>
+      <div className="mt-2 text-lg font-bold">
+        <span className="text-rose-500 dark:text-rose-300">{stats.upCount.toLocaleString('zh-CN')}</span>
+        <span className="mx-1 text-slate-400">/</span>
+        <span className="text-emerald-500 dark:text-emerald-300">{stats.downCount.toLocaleString('zh-CN')}</span>
+      </div>
+      <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+        {stats.upRatio !== undefined ? `上涨占比 ${stats.upRatio.toFixed(1)}%，${distributionLabel}` : distributionLabel}
+      </p>
+    </div>
+  );
+};
+
+const AShareLimitCard: React.FC<{ stats: MarketBreadthStats }> = ({ stats }) => {
+  if (stats.limitUpCount === undefined || stats.limitDownCount === undefined) return null;
+  return (
+    <div className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5">
+      <div className="text-xs font-semibold text-slate-400">涨停 / 跌停</div>
+      <div className="mt-2 text-lg font-bold">
+        <span className="text-rose-500 dark:text-rose-300">{stats.limitUpCount.toLocaleString('zh-CN')}</span>
+        <span className="mx-1 text-slate-400">/</span>
+        <span className="text-emerald-500 dark:text-emerald-300">{stats.limitDownCount.toLocaleString('zh-CN')}</span>
+      </div>
+      <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+        {stats.limitUpCount > stats.limitDownCount ? '涨停多于跌停，短线情绪偏强' : '跌停压力不低，短线情绪需观察'}
+      </p>
+    </div>
+  );
+};
+
 const buildMoneyFlowInterpretation = (
   mainFlowCard: NewsSummaryCard | undefined,
   rotationCard: NewsSummaryCard | undefined,
@@ -176,15 +247,16 @@ const buildMoneyFlowInterpretation = (
 ) => {
   const mainFlow = mainFlowCard?.value && mainFlowCard.value !== '--' ? mainFlowCard.value : '暂无明确主线';
   const rotation = rotationCard?.value ? `，轮动状态为${rotationCard.value}` : '';
-  const breadth = breadthCard?.value ? `；市场宽度为${breadthCard.value}` : '';
+  const breadth = breadthCard?.value ? `；涨跌分布为${breadthCard.value}` : '';
   const capital = capitalCard?.value ? `；增量资金显示${capitalCard.value}` : '';
-  return `当前资金主线偏向${mainFlow}${rotation}${breadth}${capital}。若后续放量且上涨家数维持扩散，说明主线延续性更强；若成交额缩量或宽度转弱，需要防范短线兑现。融资融券、ETF 和成交额均为 proxy，不等同于真实净申购或全市场资金净流入。`;
+  return `当前资金主线偏向${mainFlow}${rotation}${breadth}${capital}。若后续放量且上涨家数继续扩散，说明主线延续性更强；若成交额缩量或上涨家数明显回落，需要防范短线兑现。融资融券、ETF 和成交额均为 proxy，不等同于真实净申购或全市场资金净流入。`;
 };
 
 const MoneyFlowPanel: React.FC<MoneyFlowPanelProps> = ({ summary }) => {
   const flowItems = getSectionItems(summary.sections, '资金流');
   const breadthItems = getSectionItems(summary.sections, '市场宽度');
   const capitalItems = getSectionItems(summary.sections, '资金面');
+  const breadthStats = parseMarketBreadthStats(breadthItems);
   const mainFlowCard = getCard(summary.cards, '资金流');
   const rotationCard = getCard(summary.cards, '行业轮动');
   const breadthCard = getCard(summary.cards, '市场宽度');
@@ -201,7 +273,7 @@ const MoneyFlowPanel: React.FC<MoneyFlowPanelProps> = ({ summary }) => {
           </p>
           <h2 className="mt-2 text-lg font-semibold text-slate-900 dark:text-white">资金流向</h2>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            拆分主线资金、市场宽度和增量资金，避免只看单一榜单。
+            拆分主线资金、涨跌分布和增量资金，避免只看单一榜单。
           </p>
         </div>
         <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500 dark:bg-white/5 dark:text-slate-400">
@@ -220,12 +292,12 @@ const MoneyFlowPanel: React.FC<MoneyFlowPanelProps> = ({ summary }) => {
           </p>
         </div>
         <div className="rounded-3xl bg-slate-50 p-4 dark:bg-white/5">
-          <div className="text-xs font-semibold text-slate-400">市场宽度</div>
+          <div className="text-xs font-semibold text-slate-400">涨跌分布</div>
           <div className="mt-2 text-xl font-bold text-slate-900 dark:text-white">
             {breadthCard?.value ?? '--'}
           </div>
           <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
-            {turnoverCard ? `${breadthCard?.note ?? ''}；${turnoverCard.note}` : breadthCard?.note ?? '暂无宽度数据'}
+            {turnoverCard ? `${breadthCard?.note ?? ''}；${turnoverCard.note}` : breadthCard?.note ?? '暂无涨跌分布数据'}
           </p>
         </div>
         <div className="rounded-3xl bg-slate-50 p-4 dark:bg-white/5">
@@ -267,9 +339,11 @@ const MoneyFlowPanel: React.FC<MoneyFlowPanelProps> = ({ summary }) => {
         </div>
 
         <div className="rounded-3xl border border-slate-200/70 bg-white/70 p-4 dark:border-white/10 dark:bg-white/5">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-white">宽度与增量资金</h3>
-          <div className="mt-3 space-y-3">
-            {[...breadthItems, ...capitalItems].map((item) => (
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-white">涨跌与增量资金</h3>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+            <AShareBreadthCard stats={breadthStats} />
+            <AShareLimitCard stats={breadthStats} />
+            {capitalItems.map((item) => (
               <div key={`${item.tag}-${item.title}-${item.time}`} className="rounded-2xl bg-slate-50 p-3 dark:bg-white/5">
                 <div className="flex items-center gap-2 text-xs font-semibold">
                   <span className={`rounded-full px-2.5 py-1 ${toneClasses[item.tone]}`}>{item.tag}</span>
@@ -279,9 +353,9 @@ const MoneyFlowPanel: React.FC<MoneyFlowPanelProps> = ({ summary }) => {
                 <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{item.relation}</div>
               </div>
             ))}
-            {breadthItems.length + capitalItems.length === 0 ? (
+            {breadthStats.upCount === undefined && breadthStats.limitUpCount === undefined && capitalItems.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200/80 p-3 text-sm text-slate-400 dark:border-white/10 dark:text-slate-500">
-                暂无市场宽度或增量资金数据。
+                暂无涨跌分布或增量资金数据。
               </div>
             ) : null}
           </div>

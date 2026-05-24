@@ -138,6 +138,11 @@ describe('NewsPage', () => {
     expect(screen.getByText('市场资讯')).toBeInTheDocument();
     expect(screen.getByText('资金流向')).toBeInTheDocument();
     expect(screen.getByText('资金榜单')).toBeInTheDocument();
+    expect(screen.getAllByText('涨跌分布').length).toBeGreaterThan(0);
+    expect(screen.getByText('上涨 / 下跌')).toBeInTheDocument();
+    expect(screen.getByText('涨停 / 跌停')).toBeInTheDocument();
+    expect(screen.getByText(/上涨占比 76.7%，多数样本上涨/)).toBeInTheDocument();
+    expect(screen.getByText('涨停多于跌停，短线情绪偏强')).toBeInTheDocument();
     expect(screen.getByText(/资金解读：/)).toBeInTheDocument();
     expect(screen.getByText('重点消息')).toBeInTheDocument();
     expect(screen.getByText('资讯洞察')).toBeInTheDocument();
