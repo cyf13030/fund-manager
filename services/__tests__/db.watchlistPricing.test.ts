@@ -331,4 +331,92 @@ describe('calculateSummary', () => {
     // cumulativeGainPct = 500 / 1500 * 100 ≈ 33.33
     expect(summary.cumulativeGainPct).toBeCloseTo(33.3333, 4);
   });
+
+  it('清仓重加后日收益应基于当前净值计算，不受旧 navChangePct 影响', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-26T15:30:00'));
+
+    const holdingShares = 2000;
+    const costPrice = 1.5;
+    const currentNav = 1.52085;
+    const dayChangePct = 1.39;
+    const marketValue = holdingShares * currentNav;
+
+    const summary = calculateSummary([
+      {
+        id: 1,
+        code: '320007',
+        name: '诺安成长混合',
+        platform: 'Default',
+        holdingShares,
+        costPrice,
+        currentNav,
+        lastUpdate: '2026-05-26',
+        dayChangePct,
+        dayChangeVal: (marketValue * (dayChangePct / 100)) / (1 + dayChangePct / 100),
+        buyDate: '2026-05-22',
+        buyTime: 'before15',
+        settlementDays: 1,
+        realizedGain: null as unknown as undefined,
+        realizedGainCost: null as unknown as undefined,
+      },
+    ]);
+
+    expect(summary.totalAssets).toBeCloseTo(3041.7, 2);
+    expect(summary.holdingGain).toBeCloseTo(41.7, 2);
+    expect(summary.cumulativeGain).toBeCloseTo(41.7, 2);
+    expect(summary.totalDayGain).toBeCloseTo(41.7, 1);
+  });
+
+  it('清仓重加后旧记录的 dayChangeVal 不污染汇总日收益', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-26T15:30:00'));
+
+    const holdingShares = 2000;
+    const currentNav = 1.52085;
+    const dayChangePct = 1.39;
+    const marketValue = holdingShares * currentNav;
+
+    const summary = calculateSummary([
+      {
+        id: 1,
+        code: '320007',
+        name: '诺安成长混合',
+        platform: 'Default',
+        holdingShares: 0,
+        costPrice: 1.0,
+        currentNav: 1.5,
+        lastUpdate: '2026-03-10',
+        dayChangePct: -2.5,
+        dayChangeVal: -707,
+        buyDate: '2026-01-15',
+        buyTime: 'before15',
+        settlementDays: 1,
+        realizedGain: -750,
+        realizedGainCost: 1000,
+      },
+      {
+        id: 2,
+        code: '320007',
+        name: '诺安成长混合',
+        platform: 'Default',
+        holdingShares,
+        costPrice: 1.5,
+        currentNav,
+        lastUpdate: '2026-05-26',
+        dayChangePct,
+        dayChangeVal: (marketValue * (dayChangePct / 100)) / (1 + dayChangePct / 100),
+        buyDate: '2026-05-22',
+        buyTime: 'before15',
+        settlementDays: 1,
+        realizedGain: null as unknown as undefined,
+        realizedGainCost: null as unknown as undefined,
+      },
+    ]);
+
+    expect(summary.totalAssets).toBeCloseTo(3041.7, 2);
+    expect(summary.cumulativeGain).toBeCloseTo(-708.3, 2);
+    expect(summary.totalDayGain).toBeGreaterThan(0);
+    expect(summary.totalDayGain).not.toBeCloseTo(-665, 0);
+  });
 });
