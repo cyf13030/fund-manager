@@ -43,7 +43,7 @@ export interface NewsSummaryResponse {
 
 const DEFAULT_NEWS_SUMMARY_WORKER_URL = 'https://fund-manager-telegram-ai-reminder.nizhan80.workers.dev';
 const NEWS_SUMMARY_CACHE_TTL_MS = 2 * 60 * 1000;
-const NEWS_SUMMARY_STORAGE_KEY = 'fundManager.newsSummaryCache.v2';
+const NEWS_SUMMARY_STORAGE_KEY = 'fundManager.newsSummaryCache.v3';
 const LEGACY_NEWS_SUMMARY_STORAGE_KEY = 'fundManager.newsSummaryCache.v1';
 
 type CacheEntry = {
@@ -163,6 +163,24 @@ const writeLocalNewsSummaryCache = (entry: CacheEntry) => {
   }
 };
 
+const hasSectionItems = (summary: NewsSummaryResponse, title: string) => {
+  return summary.sections.some((section) => section.title === title && section.items.length > 0);
+};
+
+const getSourceStatusValue = (summary: NewsSummaryResponse, label: string) => {
+  return summary.sourceStatus.find((item) => item.label === label)?.value;
+};
+
+const shouldPersistNewsSummary = (summary: NewsSummaryResponse) => {
+  const fundFlowFailed = getSourceStatusValue(summary, '资金流') === 'failed';
+  const marketBreadthFailed = getSourceStatusValue(summary, '市场宽度') === 'failed';
+
+  if (fundFlowFailed && !hasSectionItems(summary, '资金流')) return false;
+  if (marketBreadthFailed && !hasSectionItems(summary, '市场宽度')) return false;
+
+  return true;
+};
+
 export const getCachedNewsSummary = (): NewsSummaryResponse | null => {
   if (isCacheEntryValid(cachedSummary)) {
     return cachedSummary.value;
@@ -182,6 +200,7 @@ export const clearNewsSummaryCache = () => {
   try {
     localStorage.removeItem(NEWS_SUMMARY_STORAGE_KEY);
     localStorage.removeItem(LEGACY_NEWS_SUMMARY_STORAGE_KEY);
+    localStorage.removeItem('fundManager.newsSummaryCache.v2');
   } catch {
     // ignore
   }
@@ -220,7 +239,9 @@ export const fetchNewsSummary = async (force = false): Promise<NewsSummaryRespon
     if (!value) return null;
 
     cachedSummary = { value, expiresAt: now + NEWS_SUMMARY_CACHE_TTL_MS };
-    writeLocalNewsSummaryCache(cachedSummary);
+    if (shouldPersistNewsSummary(value)) {
+      writeLocalNewsSummaryCache(cachedSummary);
+    }
     return value;
   } catch {
     return null;

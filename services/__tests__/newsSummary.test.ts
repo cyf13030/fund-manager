@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearNewsSummaryCache, fetchNewsSummary, getCachedNewsSummary } from '../newsSummary';
 
-const STORAGE_KEY = 'fundManager.newsSummaryCache.v2';
+const STORAGE_KEY = 'fundManager.newsSummaryCache.v3';
 
 describe('newsSummary', () => {
   beforeEach(() => {
@@ -53,5 +53,26 @@ describe('newsSummary', () => {
     expect(init).toMatchObject({ cache: 'no-store' });
     expect(init.headers).toMatchObject({ Accept: 'application/json' });
     expect(init.headers).not.toHaveProperty('Cache-Control');
+  });
+
+  it('不持久化资金流失败且榜单为空的短暂异常摘要', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          generatedAt: '2026-05-21T09:30:00.000Z',
+          cards: [{ title: '资金流', value: '暂无数据', note: '测试', tone: 'neutral' }],
+          sections: [{ title: '资金流', description: '测试', items: [] }],
+          sourceStatus: [{ label: '资金流', value: 'failed', tone: 'neutral' }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const summary = await fetchNewsSummary(true);
+
+    expect(summary?.cards[0].title).toBe('资金流');
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 });
