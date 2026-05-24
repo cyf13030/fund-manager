@@ -883,10 +883,36 @@ describe('telegram ai reminder worker', () => {
     expect(aiBody.messages[0].content).toContain('量化结构化数据');
     expect(aiBody.messages[0].content).toContain('不得新增、不猜测、不修正任何数值');
     expect(aiBody.messages[0].content).toContain('历史净值位置 proxy');
+    expect(aiBody.messages[0].content).toContain('参考 guzhu 的稳定分/回撤分/ATH 分框架');
+    expect(aiBody.messages[0].content).toContain('不得声称已经调用 guzhu');
+    expect(aiBody.messages[0].content).toContain('不得等同真实 ATH 综合分');
     const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
     const telegramBody = JSON.parse(telegramCalls.at(-1)?.[1].body as string) as { text: string };
     expect(telegramBody.text).toContain('养基AI详细量化解读');
     expect(telegramBody.text).toContain('组合整体表现良好');
+  });
+
+  it('Telegram 发送“长期量化”复用详细量化并接入长期评分纪律', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '长期量化', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('/chat/completions'))).toBe(true);
+    const aiBody = findAiRequestBody(fetchMock);
+    expect(aiBody.messages[0].content).toContain('长期稳定性、回撤控制、接近历史高点');
+    expect(aiBody.messages[0].content).toContain('不得把 proxy 写成真实全市场排名');
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls.at(-1)?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('养基AI详细量化解读');
   });
 
   it('量化分析会分页读取历史净值且样本够 21 条时输出部分信号', async () => {

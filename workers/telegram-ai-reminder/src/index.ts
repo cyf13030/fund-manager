@@ -947,6 +947,12 @@ const BOT_PREDICTION_DISCIPLINE_INSTRUCTION = `预测纪律：
 - 预测只能做条件化概率判断，不得写“必涨”“必跌”“一定”。
 - 必须给出支持证据、反向证据、数据缺口、触发条件和失效条件；关键数据缺失时必须降低置信度。
 - 历史预测验证只能基于此前明确写出的短期预测，不得按当前结论倒推历史判断。`;
+const BOT_GUZHU_QUANT_DISCIPLINE_INSTRUCTION = `长期基金量化评分纪律（参考 guzhu 的稳定分/回撤分/ATH 分框架）：
+- 只能借鉴“长期稳定性、回撤控制、接近历史高点、趋势健康、风险扩散”的分析框架；不得声称已经调用 guzhu 或取得 guzhu stable_score、drawdown_score、ath_score。
+- 稳定性只能基于本次已有的 20/60/120 日收益、均线位置、60 日胜率和风险收益 proxy 推断；缺少长期样本时必须说明样本不足。
+- 回撤分思想只能用已有最大回撤、波动率、Calmar/Sharpe/Sortino proxy 表达；不得把 proxy 写成真实全市场排名。
+- ATH 分思想只能表述为“历史净值位置/接近阶段高点 proxy”，不得等同真实 ATH 综合分，也不得把高位简单写成必跌或低位写成必涨。
+- 市场广度、趋势健康、风险扩散若没有全市场基金样本，只能作为组合内部或现有市场样本观察，必须明确口径边界。`;
 const SCHEDULED_ANALYSIS_CONFIG: Record<
   ScheduledAnalysisType,
   { title: string; question: string; maxLength?: number }
@@ -972,7 +978,7 @@ const CHAT_COMMANDS: ChatCommandConfig[] = [
   { kind: 'intradayProfit', aliases: ['今日盘中实时收益', '盘中实时收益', '盘中收益', '实时收益'] },
   { kind: 'profit', aliases: ['今日盈利', '今日收益'] },
   { kind: 'quantAnalysis', aliases: ['量化分析', '量化信号', '基金量化'] },
-  { kind: 'quantInterpretation', aliases: ['详细量化', '量化解读'] },
+  { kind: 'quantInterpretation', aliases: ['详细量化', '量化解读', '长期量化', '基金评分', '长期优选'] },
   { kind: 'analysis', aliases: ['分析'], question: SHORT_ANALYSIS_QUESTION, maxLength: 900 },
   { kind: 'analysis', aliases: ['市场分析'], question: MARKET_ANALYSIS_QUESTION, maxLength: 1200, title: '养基AI市场分析' },
   { kind: 'analysis', aliases: ['涨跌'], question: UP_DOWN_REASON_QUESTION, maxLength: 900, title: '养基AI涨跌归因' },
@@ -5050,6 +5056,7 @@ const buildTomorrowPredictionPrompt = (context: AnalysisContextSnapshot, mode: s
   return `${roleInstruction}
 要求：
 ${BOT_FACT_DISCIPLINE_INSTRUCTION}
+${BOT_GUZHU_QUANT_DISCIPLINE_INSTRUCTION}
 ${BOT_PREDICTION_DISCIPLINE_INSTRUCTION}
 1) 只基于“预测专用摘要”推理，不得编造摘要之外的指数、期货、新闻、资金流、北向资金或公告。
 2) 外围市场/指数期货只能作为情绪和开盘扰动参考，不能写成 A 股必然涨跌。
@@ -5163,6 +5170,7 @@ const buildUpDownReasonPrompt = (context: AnalysisContextSnapshot, mode: string)
   return `${roleInstruction}
 要求：
 ${BOT_FACT_DISCIPLINE_INSTRUCTION}
+${BOT_GUZHU_QUANT_DISCIPLINE_INSTRUCTION}
 1) 只基于“今日涨跌归因摘要”推理，不得编造摘要之外的指数、新闻、资金流或持仓表现。
 2) 必须先判断当前更偏“上涨、下跌、震荡、不确定”之一；如果市场未开盘或数据不足，必须说明判断口径并降低确定性。
 3) 解释“为什么涨/跌”时，必须同时区分市场因素、资金流因素、消息面因素、持仓暴露因素和量化/风险因素。
@@ -5248,6 +5256,7 @@ const buildMarketAnalysisPrompt = (context: AnalysisContextSnapshot, mode: strin
   return `${roleInstruction}
 要求：
 ${BOT_FACT_DISCIPLINE_INSTRUCTION}
+${BOT_GUZHU_QUANT_DISCIPLINE_INSTRUCTION}
 1) 只基于“市场分析专用摘要”推理，不得编造摘要之外的指数、新闻、资金流或公告。
 2) 必须区分市场主线、资金流方向和当前组合底层暴露，不能把市场热题材直接说成组合已持有。
 3) 市场宽度如有个股样本，优先用上涨/下跌家数、涨跌停、平均涨跌幅和成交额判断；样本缺失时只能说明数据不足。
@@ -5349,6 +5358,7 @@ const buildPositionActionPrompt = (context: AnalysisContextSnapshot, question: s
   return `${roleInstruction}
 要求：
 ${BOT_FACT_DISCIPLINE_INSTRUCTION}
+${BOT_GUZHU_QUANT_DISCIPLINE_INSTRUCTION}
 1) 只基于“专项操作摘要”推理，不得编造摘要之外的指数、新闻、资金流或持仓事实。
 2) ${actionRules}
 3) 必须结合 A 股市场、消息面、资金流、持仓盈亏、底层暴露、重合度、量化摘要和交易确认状态。
@@ -5398,7 +5408,7 @@ const buildHoldingsAnalysisPrompt = (context: AnalysisContextSnapshot, mode: str
       : mode === 'quick'
         ? '你是一位基金持仓分析助手，请用快速诊断方式先给关键结论，再补充依据。必须按 T+1 交易确认口径区分已确认持仓、待确认交易和待到账资金。'
         : '你是一位资深基金投顾，请从收益、配置、集中度、风险、改进建议等多个维度做深度分析。必须按 T+1 交易确认口径区分已确认持仓、待确认交易和待到账资金。';
-  modeInstruction = `${modeInstruction}\n${BOT_FACT_DISCIPLINE_INSTRUCTION}`;
+  modeInstruction = `${modeInstruction}\n${BOT_FACT_DISCIPLINE_INSTRUCTION}\n${BOT_GUZHU_QUANT_DISCIPLINE_INSTRUCTION}`;
 
   const summary = [
     `总资产: ${holdings.totalAssets}`,
@@ -6011,6 +6021,7 @@ const buildQuantInterpretationPrompt = (result: QuantAnalysisResult) => `你是�
 
 要求：
 ${BOT_FACT_DISCIPLINE_INSTRUCTION}
+${BOT_GUZHU_QUANT_DISCIPLINE_INSTRUCTION}
 1) 只能解释“量化结构化数据”中的字段，不得新增、不猜测、不修正任何数值。
 2) 缺失字段必须说明“缺失”，不能补全。
 3) 估值只能表述为“历史净值位置 proxy”，不得说成真实 PE/PB、便宜或昂贵。
