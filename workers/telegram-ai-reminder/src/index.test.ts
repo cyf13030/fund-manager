@@ -230,6 +230,38 @@ const eastMoneyMarketBreadthPayload = {
     ],
   },
 };
+const eastMoneyMarketBreadthPagePayloads = [
+  {
+    data: {
+      total: 101,
+      diff: [
+        { f12: '000001', f14: '平安银行', f3: 120, f6: 1000000000 },
+      ],
+    },
+  },
+  {
+    data: {
+      total: 101,
+      diff: [
+        { f12: '000003', f14: '样本上涨', f3: 1010, f6: 300000000 },
+      ],
+    },
+  },
+];
+const eastMoneyMarketBreadthDeclinePagePayloads = [
+  {
+    data: {
+      total: 101,
+      diff: [{ f12: '000002', f14: '万科A', f3: -80, f6: 800000000 }],
+    },
+  },
+  {
+    data: {
+      total: 101,
+      diff: [{ f12: '000004', f14: '样本下跌', f3: -1020, f6: 200000000 }],
+    },
+  },
+];
 const eastMoneyNorthboundPayload = {
   data: {
     hk2sh: { dayNetAmtIn: 1200000000, date2: '2026-05-18' },
@@ -480,6 +512,35 @@ describe('telegram ai reminder worker', () => {
     expect(body.sourceStatus.some((item) => item.label === '盘后消息')).toBe(true);
     expect(body.sourceStatus.some((item) => item.label === '北向资金')).toBe(true);
     expect(body.sourceStatus.some((item) => item.label === '市场宽度')).toBe(true);
+  });
+
+  it('市场宽度会分页读取完整样本而不是只统计涨幅首页', async () => {
+    const fetchMock = vi.fn();
+    const baseFetchMock = vi.fn();
+    mockBaseSuccessfulFetches(baseFetchMock);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get') && url.includes('fid=f3')) {
+        const parsed = new URL(url);
+        const page = Number(parsed.searchParams.get('pn') ?? '1');
+        const payloads = parsed.searchParams.get('po') === '0' ? eastMoneyMarketBreadthDeclinePagePayloads : eastMoneyMarketBreadthPagePayloads;
+        return Promise.resolve(jsonResponse(payloads[page - 1] ?? { data: { total: 4, diff: [] } }));
+      }
+      return baseFetchMock(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    const body = (await response.json()) as {
+      cards: Array<{ title: string; value: string; note: string }>;
+      sections: Array<{ title: string; items: Array<{ title: string; relation: string }> }>;
+    };
+
+    const breadthCard = body.cards.find((card) => card.title === '市场宽度');
+    const breadthItem = body.sections.find((section) => section.title === '市场宽度')?.items[0];
+    expect(breadthCard?.value).toBe('2 涨 / 2 跌');
+    expect(breadthCard?.note).toContain('样本 4 个');
+    expect(breadthItem?.relation).toContain('涨停 1、跌停 1');
   });
 
   it('news-summary uses explicit northbound and southbound amounts when southbound dominates', async () => {

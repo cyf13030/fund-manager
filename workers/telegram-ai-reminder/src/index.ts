@@ -2812,8 +2812,9 @@ const fetchFundFlowSnapshot = async (env: Env): Promise<FundFlowSnapshot | undef
   }
 };
 
-const normalizeEastMoneyChangePct = (value: number) => {
-  return Math.abs(value) > 100 ? value / 100 : value;
+const normalizeEastMoneyChangePct = (rawValue: number | string, value: number) => {
+  if (typeof rawValue === 'string' && rawValue.includes('.')) return value;
+  return Number.isInteger(value) ? value / 100 : value;
 };
 
 const parseEastMoneyMarketBreadthItem = (item: { f12?: string; f14?: string; f3?: number | string; f6?: number | string }) => {
@@ -2825,9 +2826,27 @@ const parseEastMoneyMarketBreadthItem = (item: { f12?: string; f14?: string; f3?
   return {
     code,
     name,
-    changePct: round(normalizeEastMoneyChangePct(changePct), 2),
+    changePct: round(normalizeEastMoneyChangePct(item.f3, changePct), 2),
     turnoverAmount: round(turnoverAmount, 2),
   };
+};
+
+const fetchEastMoneyMarketBreadthPage = async (fs: string, page: number, pageSize: number, sortOrder: 'asc' | 'desc') => {
+  const url = new URL(EASTMONEY_MARKET_BREADTH_API);
+  url.searchParams.set('pn', String(page));
+  url.searchParams.set('pz', String(pageSize));
+  url.searchParams.set('po', sortOrder === 'desc' ? '1' : '0');
+  url.searchParams.set('np', '1');
+  url.searchParams.set('ut', 'bd1d9ddb04089700cf9c27f6f7426281');
+  url.searchParams.set('fid', 'f3');
+  url.searchParams.set('fs', fs);
+  url.searchParams.set('fields', 'f12,f14,f3,f6');
+  return fetchJsonWithTimeout<EastMoneyMarketBreadthResponse>(
+    url.toString(),
+    { headers: { Accept: 'application/json' } },
+    `读取东方财富市场宽度(${fs})`,
+    5000,
+  );
 };
 
 const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnapshot | undefined> => {
@@ -2835,32 +2854,27 @@ const fetchEastMoneyMarketBreadthSnapshot = async (): Promise<MarketBreadthSnaps
   if (cache && Date.now() - Date.parse(cache.asOf) <= 60_000) return cache;
 
   const fsList = ['m:0+t:6', 'm:0+t:80', 'm:0+t:81'];
+  const pageSize = 100;
+  const maxPages = 80;
   const failedSources: string[] = [];
   const seen = new Map<string, { code: string; name: string; changePct: number; turnoverAmount: number }>();
 
   await Promise.all(
     fsList.map(async (fs) => {
       try {
-        const url = new URL(EASTMONEY_MARKET_BREADTH_API);
-        url.searchParams.set('pn', '1');
-        url.searchParams.set('pz', '5000');
-        url.searchParams.set('po', '1');
-        url.searchParams.set('np', '1');
-        url.searchParams.set('ut', 'bd1d9ddb04089700cf9c27f6f7426281');
-        url.searchParams.set('fid', 'f3');
-        url.searchParams.set('fs', fs);
-        url.searchParams.set('fields', 'f12,f14,f3,f6');
-        const response = await fetchJsonWithTimeout<EastMoneyMarketBreadthResponse>(
-          url.toString(),
-          { headers: { Accept: 'application/json' } },
-          `读取东方财富市场宽度(${fs})`,
-          5000,
-        );
-        (response.data?.diff || []).forEach((raw) => {
-          const parsed = parseEastMoneyMarketBreadthItem(raw);
-          if (!parsed) return;
-          seen.set(parsed.code, parsed);
-        });
+        for (const sortOrder of ['desc', 'asc'] as const) {
+          for (let page = 1; page <= maxPages; page += 1) {
+            const response = await fetchEastMoneyMarketBreadthPage(fs, page, pageSize, sortOrder);
+            const rows = response.data?.diff || [];
+            rows.forEach((raw) => {
+              const parsed = parseEastMoneyMarketBreadthItem(raw);
+              if (!parsed) return;
+              seen.set(parsed.code, parsed);
+            });
+            const total = response.data?.total ?? 0;
+            if (rows.length === 0 || page * pageSize >= total) break;
+          }
+        }
       } catch {
         failedSources.push(fs);
       }
