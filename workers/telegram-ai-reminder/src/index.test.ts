@@ -890,6 +890,89 @@ describe('telegram ai reminder worker', () => {
     expect(telegramBody.text).not.toContain('历史净值样本少于 21 条');
   });
 
+  it('量化分析在 F10 请求失败时继续回退到净值走势数据', async () => {
+    const payload = {
+      ...backupPayload,
+      funds: [{ ...backupPayload.funds[0], code: '017811', name: 'F10失败回退基金' }],
+    };
+    const trendRows = Array.from({ length: 25 }, (_, index) => {
+      const timestamp = Date.UTC(2026, 4, 1 + index);
+      return { x: timestamp, y: Number((2 + index * 0.01).toFixed(4)), equityReturn: 0, unitMoney: '' };
+    });
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(payload) } } }),
+        );
+      }
+      if (url.includes('F10DataApi.aspx')) return Promise.reject(new Error('F10 timeout'));
+      if (url.includes('pingzhongdata')) {
+        return Promise.resolve(new Response(`var Data_netWorthTrend = ${JSON.stringify(trendRows)};`));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '量化分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('pingzhongdata'))).toBe(true);
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls.at(-1)?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('F10失败回退基金');
+    expect(telegramBody.text).not.toContain('历史净值样本少于 21 条');
+  });
+
+  it('量化分析在前两路净值不足时回退到移动端净值走势', async () => {
+    const payload = {
+      ...backupPayload,
+      funds: [{ ...backupPayload.funds[0], code: '018816', name: '移动端净值基金' }],
+    };
+    const mobileRows = Array.from({ length: 25 }, (_, index) => ({
+      FSRQ: `2026-05-${String(1 + index).padStart(2, '0')}`,
+      DWJZ: (1.5 + index * 0.01).toFixed(4),
+    }));
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({ files: { 'fund-manager-sync.json': { content: JSON.stringify(payload) } } }),
+        );
+      }
+      if (url.includes('F10DataApi.aspx')) return Promise.resolve(new Response('var apidata={ content:"",records:0,pages:0,curpage:1};'));
+      if (url.includes('pingzhongdata')) return Promise.resolve(new Response('var Data_netWorthTrend = [];'));
+      if (url.includes('FundNetDiagram.ashx')) {
+        return Promise.resolve(jsonResponse({ Datas: mobileRows, ErrCode: 0, TotalCount: mobileRows.length }));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(
+      new Request('https://worker.example/telegram', {
+        method: 'POST',
+        body: JSON.stringify({ message: { text: '量化分析', chat: { id: 123456 } } }),
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes('FundNetDiagram.ashx'))).toBe(true);
+    const telegramCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('api.telegram.org'));
+    const telegramBody = JSON.parse(telegramCalls.at(-1)?.[1].body as string) as { text: string };
+    expect(telegramBody.text).toContain('移动端净值基金');
+    expect(telegramBody.text).not.toContain('历史净值样本少于 21 条');
+  });
+
   it('量化分析组合评分只按有量化数据的资产加权', async () => {
     const payload = {
       ...backupPayload,

@@ -54,7 +54,7 @@ export interface QuantAnalysisResponse {
 
 const DEFAULT_QUANT_ANALYSIS_WORKER_URL = 'https://fund-manager-telegram-ai-reminder.nizhan80.workers.dev';
 const QUANT_ANALYSIS_CACHE_TTL_MS = 2 * 60 * 1000;
-const QUANT_ANALYSIS_STORAGE_KEY = 'fundManager.quantAnalysisCache.v2';
+const QUANT_ANALYSIS_STORAGE_KEY = 'fundManager.quantAnalysisCache.v3';
 
 interface CacheEntry {
   expiresAt: number;
@@ -150,6 +150,9 @@ const normalizeQuantAnalysis = (value: unknown): QuantAnalysisResponse | null =>
 
 const isCacheEntryValid = (entry: CacheEntry | null): entry is CacheEntry => Boolean(entry && entry.expiresAt > Date.now());
 
+export const isQuantAnalysisComplete = (value: QuantAnalysisResponse | null) =>
+  Boolean(value && value.portfolio.totalCount > 0 && value.portfolio.availableCount >= value.portfolio.totalCount);
+
 const readLocalQuantAnalysisCache = (): CacheEntry | null => {
   try {
     const raw = localStorage.getItem(QUANT_ANALYSIS_STORAGE_KEY);
@@ -180,9 +183,11 @@ const resolveQuantAnalysisWorkerUrl = () => {
 };
 
 export const getCachedQuantAnalysis = (): QuantAnalysisResponse | null => {
-  if (isCacheEntryValid(cachedQuantAnalysis)) return cachedQuantAnalysis.value;
+  if (isCacheEntryValid(cachedQuantAnalysis) && isQuantAnalysisComplete(cachedQuantAnalysis.value)) {
+    return cachedQuantAnalysis.value;
+  }
   const localEntry = readLocalQuantAnalysisCache();
-  if (isCacheEntryValid(localEntry)) {
+  if (isCacheEntryValid(localEntry) && isQuantAnalysisComplete(localEntry.value)) {
     cachedQuantAnalysis = localEntry;
     return localEntry.value;
   }
@@ -200,11 +205,13 @@ export const clearQuantAnalysisCache = () => {
 
 export const fetchQuantAnalysis = async (force = false): Promise<QuantAnalysisResponse | null> => {
   const now = Date.now();
-  if (!force && isCacheEntryValid(cachedQuantAnalysis)) return cachedQuantAnalysis.value;
+  if (!force && isCacheEntryValid(cachedQuantAnalysis) && isQuantAnalysisComplete(cachedQuantAnalysis.value)) {
+    return cachedQuantAnalysis.value;
+  }
 
   if (!force) {
     const localEntry = readLocalQuantAnalysisCache();
-    if (isCacheEntryValid(localEntry)) {
+    if (isCacheEntryValid(localEntry) && isQuantAnalysisComplete(localEntry.value)) {
       cachedQuantAnalysis = localEntry;
       return localEntry.value;
     }
@@ -221,9 +228,11 @@ export const fetchQuantAnalysis = async (force = false): Promise<QuantAnalysisRe
     const value = normalizeQuantAnalysis(await res.json());
     if (!value) return null;
 
-    const entry = { expiresAt: now + QUANT_ANALYSIS_CACHE_TTL_MS, value };
-    cachedQuantAnalysis = entry;
-    writeLocalQuantAnalysisCache(entry);
+    if (isQuantAnalysisComplete(value)) {
+      const entry = { expiresAt: now + QUANT_ANALYSIS_CACHE_TTL_MS, value };
+      cachedQuantAnalysis = entry;
+      writeLocalQuantAnalysisCache(entry);
+    }
     return value;
   } catch {
     return null;

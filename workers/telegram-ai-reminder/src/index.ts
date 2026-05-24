@@ -1969,12 +1969,43 @@ const parseEastMoneyPingzhongdataNavRows = (text: string): FundHistoricalNavPoin
   }
 };
 
+const parseEastMoneyMobileNavRows = (text: string): FundHistoricalNavPoint[] => {
+  try {
+    const parsed = JSON.parse(text) as { Datas?: Array<{ FSRQ?: unknown; DWJZ?: unknown }> };
+    const rows = Array.isArray(parsed.Datas) ? parsed.Datas : [];
+    return rows
+      .map<FundHistoricalNavPoint | null>((row) => {
+        const navDate = typeof row.FSRQ === 'string' ? row.FSRQ : '';
+        const nav = typeof row.DWJZ === 'number' ? row.DWJZ : Number(row.DWJZ);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(navDate) || !Number.isFinite(nav) || nav <= 0) return null;
+        return { navDate, nav };
+      })
+      .filter((item): item is FundHistoricalNavPoint => Boolean(item))
+      .reverse();
+  } catch (error) {
+    console.warn('解析东方财富移动端净值失败', error);
+    return [];
+  }
+};
+
+const appendHistoricalNavPoints = (
+  target: FundHistoricalNavPoint[],
+  seenDates: Set<string>,
+  points: FundHistoricalNavPoint[],
+) => {
+  points.forEach((point) => {
+    if (seenDates.has(point.navDate) || target.length >= QUANT_NAV_TARGET_SIZE) return;
+    seenDates.add(point.navDate);
+    target.push(point);
+  });
+};
+
 const fetchFundHistoricalNavForQuant = async (fundCode: string): Promise<FundHistoricalNavPoint[]> => {
   const navs: FundHistoricalNavPoint[] = [];
   const seenDates = new Set<string>();
 
-  try {
-    for (let page = 1; page <= QUANT_NAV_MAX_PAGES && navs.length < QUANT_NAV_TARGET_SIZE; page += 1) {
+  for (let page = 1; page <= QUANT_NAV_MAX_PAGES && navs.length < QUANT_NAV_TARGET_SIZE; page += 1) {
+    try {
       const text = await fetchTextWithTimeout(
         `https://fundf10.eastmoney.com/F10DataApi.aspx?type=lsjz&code=${fundCode}&page=${page}&per=${QUANT_NAV_PAGE_SIZE}&rt=${Date.now()}`,
         { headers: { Accept: '*/*' } },
@@ -1983,33 +2014,42 @@ const fetchFundHistoricalNavForQuant = async (fundCode: string): Promise<FundHis
       );
       const rows = parseEastMoneyHistoricalNavRows(text);
       if (rows.length === 0) break;
-
-      rows.forEach((point) => {
-        if (seenDates.has(point.navDate) || navs.length >= QUANT_NAV_TARGET_SIZE) return;
-        seenDates.add(point.navDate);
-        navs.push(point);
-      });
+      appendHistoricalNavPoints(navs, seenDates, rows);
+    } catch (error) {
+      console.warn(`读取基金 ${fundCode} F10 历史净值第 ${page} 页失败`, error);
+      break;
     }
+  }
 
-    if (navs.length >= 21) return navs;
+  if (navs.length >= 21) return navs;
 
+  try {
     const trendText = await fetchTextWithTimeout(
       `https://fund.eastmoney.com/pingzhongdata/${fundCode}.js?v=${Date.now()}`,
       { headers: { Accept: '*/*' } },
       `读取基金 ${fundCode} 净值走势`,
       QUANT_NAV_REQUEST_TIMEOUT_MS,
     );
-    parseEastMoneyPingzhongdataNavRows(trendText).forEach((point) => {
-      if (seenDates.has(point.navDate) || navs.length >= QUANT_NAV_TARGET_SIZE) return;
-      seenDates.add(point.navDate);
-      navs.push(point);
-    });
-
-    return navs;
+    appendHistoricalNavPoints(navs, seenDates, parseEastMoneyPingzhongdataNavRows(trendText));
   } catch (error) {
-    console.warn(`读取基金 ${fundCode} 历史净值失败`, error);
-    return navs;
+    console.warn(`读取基金 ${fundCode} 净值走势失败`, error);
   }
+
+  if (navs.length >= 21) return navs;
+
+  try {
+    const mobileText = await fetchTextWithTimeout(
+      `https://fundmobapi.eastmoney.com/FundMApi/FundNetDiagram.ashx?FCODE=${fundCode}&RANGE=3y&deviceid=Wap&plat=Wap&product=EFund&version=2.0.0`,
+      { headers: { Accept: 'application/json' } },
+      `读取基金 ${fundCode} 移动端净值走势`,
+      QUANT_NAV_REQUEST_TIMEOUT_MS,
+    );
+    appendHistoricalNavPoints(navs, seenDates, parseEastMoneyMobileNavRows(mobileText));
+  } catch (error) {
+    console.warn(`读取基金 ${fundCode} 移动端净值走势失败`, error);
+  }
+
+  return navs;
 };
 
 const calculatePeriodReturnPct = (navs: FundHistoricalNavPoint[], days: number) => {

@@ -5,10 +5,18 @@ import { QuantAnalysisCard } from '../QuantAnalysisCard';
 
 const fetchQuantAnalysisMock = vi.fn();
 const interpretQuantAnalysisMock = vi.fn();
+let cachedQuantAnalysis: unknown = null;
 
 vi.mock('../../services/quantAnalysis', () => ({
-  getCachedQuantAnalysis: () => null,
+  getCachedQuantAnalysis: () => cachedQuantAnalysis,
   fetchQuantAnalysis: (...args: unknown[]) => fetchQuantAnalysisMock(...args),
+  isQuantAnalysisComplete: (value: { portfolio?: { availableCount: number; totalCount: number } } | null) =>
+    Boolean(
+      value &&
+        value.portfolio &&
+        value.portfolio.totalCount > 0 &&
+        value.portfolio.availableCount >= value.portfolio.totalCount,
+    ),
 }));
 
 vi.mock('../../services/quantInterpretation', () => ({
@@ -35,6 +43,7 @@ vi.mock('../ModalShell', () => ({
 
 describe('QuantAnalysisCard', () => {
   beforeEach(() => {
+    cachedQuantAnalysis = null;
     fetchQuantAnalysisMock.mockResolvedValue({
       ok: true,
       generatedAt: '2026-05-22T10:00:00.000Z',
@@ -103,5 +112,50 @@ describe('QuantAnalysisCard', () => {
 
     await waitFor(() => expect(screen.getByText(/量化结构偏积极/)).toBeInTheDocument());
     expect(interpretQuantAnalysisMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes incomplete cached analysis before showing details', async () => {
+    cachedQuantAnalysis = {
+      ok: true,
+      generatedAt: '2026-05-22T09:00:00.000Z',
+      portfolio: {
+        signal: '观望',
+        score: 0.3,
+        availableCount: 1,
+        totalCount: 3,
+        coveragePct: 33.33,
+        riskReturn: {},
+      },
+      groups: [
+        {
+          title: '数据不足',
+          items: [
+            {
+              code: '000002',
+              name: '旧缓存基金',
+              categoryLabel: 'DOMESTIC',
+              marketLabel: 'CN',
+              signal: '观望',
+              score: 0.3,
+              dataStatus: 'insufficient',
+              reason: '旧缓存样本不足',
+              trendLabel: '均线不足',
+              valuationLabel: '估值不足',
+              benchmarkText: '基准: 缺失',
+              metrics: {},
+            },
+          ],
+        },
+      ],
+      note: '旧缓存',
+    };
+
+    render(<QuantAnalysisCard />);
+
+    fireEvent.click(screen.getByRole('button', { name: /量化信号/ }));
+
+    await waitFor(() => expect(screen.getByText(/覆盖 1\/1/)).toBeInTheDocument());
+    expect(screen.queryByText('旧缓存基金')).not.toBeInTheDocument();
+    expect(fetchQuantAnalysisMock).toHaveBeenCalledWith(true);
   });
 });

@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import {
   fetchQuantAnalysis,
   getCachedQuantAnalysis,
+  isQuantAnalysisComplete,
   type QuantAnalysisFundItem,
   type QuantAnalysisResponse,
   type QuantSignal,
@@ -96,18 +97,18 @@ export const QuantAnalysisCard: React.FC = () => {
   const portfolio = analysis?.portfolio;
   const openDetails = () => {
     setIsOpen(true);
-    if (!analysis) void loadAnalysis(false);
+    void loadAnalysis(!isQuantAnalysisComplete(analysis));
   };
 
   const loadInterpretation = async (force = false) => {
     const shouldRefreshAnalysis =
-      force || !analysis || analysis.portfolio.availableCount < analysis.portfolio.totalCount;
+      force || !analysis || !isQuantAnalysisComplete(analysis);
     const current = await fetchQuantAnalysis(shouldRefreshAnalysis);
     if (!current) {
       setInterpretationError('量化数据读取失败，暂不能生成 AI 解读。');
       return;
     }
-    if (!analysis) setAnalysis(current);
+    setAnalysis(current);
     if (!aiRuntime.apiKey) {
       setInterpretationError('请先在设置中填写 AI 接口密钥。');
       window.dispatchEvent(new CustomEvent('open-ai-settings'));
