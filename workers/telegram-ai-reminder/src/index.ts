@@ -3745,28 +3745,27 @@ interface PublicNewsSummaryResponse {
 
 const createPublicNewsInsightTone = (text: string): PublicNewsSummaryTone => {
   const normalized = text.toLowerCase();
-  if (
-    normalized.includes('利好') ||
-    normalized.includes('回购') ||
-    normalized.includes('增持') ||
-    normalized.includes('上调') ||
-    normalized.includes('增长') ||
-    normalized.includes('创新高')
-  ) {
-    return 'positive';
-  }
-  if (
-    normalized.includes('减持') ||
-    normalized.includes('监管') ||
-    normalized.includes('下调') ||
-    normalized.includes('暴雷') ||
-    normalized.includes('处罚') ||
-    normalized.includes('回落') ||
-    normalized.includes('下跌')
-  ) {
-    return 'negative';
-  }
-  if (normalized.includes('风险') || normalized.includes('分歧')) return 'warning';
+  const positiveKeywords = [
+    '利好',
+    '回购',
+    '增持',
+    '上调',
+    '增长',
+    '创新高',
+    '降价',
+    '协议',
+    '谈成',
+    '好消息',
+    '放弃高浓缩铀',
+    '回升',
+    '走强',
+  ];
+  const negativeKeywords = ['减持', '下调', '暴雷', '处罚', '回落', '下跌', '枪声', '封锁', '制裁'];
+  const warningKeywords = ['风险', '分歧', '监管', '整治', '非法', '调查', '突发', '冲突', '关税'];
+
+  if (negativeKeywords.some((keyword) => normalized.includes(keyword.toLowerCase()))) return 'negative';
+  if (warningKeywords.some((keyword) => normalized.includes(keyword.toLowerCase()))) return 'warning';
+  if (positiveKeywords.some((keyword) => normalized.includes(keyword.toLowerCase()))) return 'positive';
   return 'neutral';
 };
 
@@ -3793,6 +3792,17 @@ const formatPublicMoney = (value: number) => {
   if (absValue >= 100000000) return `${sign}${round(absValue / 100000000).toFixed(2)} 亿`;
   if (absValue >= 10000) return `${sign}${round(absValue / 10000).toFixed(2)} 万`;
   return `${sign}${round(absValue).toFixed(2)} 元`;
+};
+
+const formatNorthboundCapitalSummary = (snapshot: NorthboundCapitalSnapshot | undefined) => {
+  if (!snapshot || snapshot.dataStatus !== 'available') return '北向暂无数据';
+  return `北向${formatPublicMoney(snapshot.northboundNetIn)} / 南向${formatPublicMoney(snapshot.southboundNetIn)}`;
+};
+
+const resolveCapitalFlowTag = (snapshot: NorthboundCapitalSnapshot | undefined) => {
+  if (snapshot?.netDirection === 'northbound') return '北向';
+  if (snapshot?.netDirection === 'southbound') return '南向';
+  return '资金面';
 };
 
 const PORTFOLIO_NEWS_SYNONYMS: Record<string, string[]> = {
@@ -4343,9 +4353,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
     marketBreadthSnapshot?.sampleSize
       ? `宽度${marketBreadthSnapshot.positiveCount}涨/${marketBreadthSnapshot.negativeCount}跌`
       : '市场宽度暂无数据',
-    northboundCapitalSnapshot?.dataStatus === 'available'
-      ? `北向${formatPublicMoney(northboundCapitalSnapshot.northboundNetIn)}`
-      : '北向暂无数据',
+    formatNorthboundCapitalSummary(northboundCapitalSnapshot),
   ].join(' · ');
 
   const cards: PublicNewsSummaryCard[] = [
@@ -4451,7 +4459,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
           : '暂无数据',
       note:
         northboundCapitalSnapshot?.dataStatus === 'available'
-          ? `${northboundCapitalSnapshot.note}；ETF方向 proxy：${etfDirectionProxySnapshot?.label ?? '中性'}，不等同于净申购。`
+          ? `${formatNorthboundCapitalSummary(northboundCapitalSnapshot)}；${northboundCapitalSnapshot.note}；ETF方向 proxy：${etfDirectionProxySnapshot?.label ?? '中性'}，不等同于净申购。`
           : northboundCapitalSnapshot?.note ?? '北向资金暂不可用',
       tone:
         northboundCapitalSnapshot?.netDirection === 'northbound'
@@ -4562,7 +4570,7 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
         ...(northboundCapitalSnapshot?.dataStatus === 'available'
           ? [
               {
-                tag: '北向',
+                tag: resolveCapitalFlowTag(northboundCapitalSnapshot),
                 title: northboundCapitalSnapshot.note,
                 impact:
                   northboundCapitalSnapshot.netDirection === 'northbound'

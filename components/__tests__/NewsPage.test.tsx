@@ -152,7 +152,8 @@ describe('NewsPage', () => {
       </LanguageProvider>,
     );
 
-    expect(screen.getByText('缓存摘要')).toBeInTheDocument();
+    expect(screen.getAllByText('缓存摘要').length).toBeGreaterThan(0);
+    expect(screen.getByText('缓存数据')).toBeInTheDocument();
     expect(screen.getAllByText('本地缓存内容。').length).toBeGreaterThan(0);
     await waitFor(() => expect(fetchNewsSummaryMock).toHaveBeenCalledWith(true));
   });

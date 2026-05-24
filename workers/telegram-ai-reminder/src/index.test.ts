@@ -237,6 +237,31 @@ const eastMoneyNorthboundPayload = {
     sz2hk: { dayNetAmtIn: 300000000, date2: '2026-05-18' },
   },
 };
+const southboundDominantPayload = {
+  data: {
+    hk2sh: { dayNetAmtIn: 0, date2: '2026-05-18' },
+    hk2sz: { dayNetAmtIn: 0, date2: '2026-05-18' },
+    sz2hk: { dayNetAmtIn: 4200000, date2: '2026-05-18' },
+  },
+};
+const mixedToneNewsPayload = {
+  data: {
+    list: [
+      {
+        title: '八部门联合整治非法跨境证券期货基金经营活动',
+        mediaName: '东方财富',
+        url: 'https://finance.eastmoney.com/risk.html',
+        showTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      },
+      {
+        title: 'DeepSeek宣布永久降价 每百万Tokens输入仅需2.5分钱',
+        mediaName: '中国基金报',
+        url: 'https://finance.eastmoney.com/ai.html',
+        showTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
+      },
+    ],
+  },
+};
 const unavailableEastMoneyFundFlowPayload = {
   data: {
     diff: [
@@ -455,6 +480,50 @@ describe('telegram ai reminder worker', () => {
     expect(body.sourceStatus.some((item) => item.label === '盘后消息')).toBe(true);
     expect(body.sourceStatus.some((item) => item.label === '北向资金')).toBe(true);
     expect(body.sourceStatus.some((item) => item.label === '市场宽度')).toBe(true);
+  });
+
+  it('news-summary uses explicit northbound and southbound amounts when southbound dominates', async () => {
+    const fetchMock = vi.fn();
+    const baseFetchMock = vi.fn();
+    mockBaseSuccessfulFetches(baseFetchMock);
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) {
+        return Promise.resolve(jsonResponse(southboundDominantPayload));
+      }
+      return baseFetchMock(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    const body = (await response.json()) as {
+      summaryLine: string;
+      cards: Array<{ title: string; note: string }>;
+      sections: Array<{ title: string; items: Array<{ tag: string; title: string }> }>;
+    };
+
+    expect(body.summaryLine).toContain('北向+0.00 元 / 南向+420.00 万');
+    expect(body.cards.find((card) => card.title === '资金面')?.note).toContain('北向+0.00 元 / 南向+420.00 万');
+    const capitalItem = body.sections.find((section) => section.title === '资金面')?.items[0];
+    expect(capitalItem?.tag).toBe('南向');
+    expect(capitalItem?.title).toContain('南向净流入 +420.00 万');
+  });
+
+  it('news-summary classifies policy risk and AI price-cut news instead of marking all neutral', async () => {
+    const fetchMock = vi.fn();
+    mockBaseSuccessfulFetches(fetchMock, mixedToneNewsPayload, emptySinaNewsPayload);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    const body = (await response.json()) as {
+      cards: Array<{ title: string; value: string }>;
+      sections: Array<{ title: string; items: Array<{ title: string; tone: string; impact: string }> }>;
+    };
+
+    expect(body.cards.find((card) => card.title === '盘后消息')?.value).toBe('1 正 / 0 风险');
+    const newsItems = body.sections.find((section) => section.title === '盘后消息')?.items ?? [];
+    expect(newsItems.find((item) => item.title.includes('整治'))?.tone).toBe('warning');
+    expect(newsItems.find((item) => item.title.includes('降价'))?.tone).toBe('positive');
   });
 
   it('quant-analysis endpoint returns structured portfolio quant data', async () => {
