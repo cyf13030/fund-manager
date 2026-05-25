@@ -2866,6 +2866,44 @@ const updateLastGoodMarketSnapshots = (
   return { ...state, updatedAt: new Date().toISOString(), lastGoodSnapshots: next };
 };
 
+const resolveEffectiveMarketSnapshots = (
+  analysisState: AnalysisStatePayload,
+  snapshots: LastGoodMarketSnapshots,
+): Required<LastGoodMarketSnapshots> => {
+  const fundFlowSnapshot = snapshots.fundFlowSnapshot?.items.length
+    ? snapshots.fundFlowSnapshot
+    : analysisState.lastGoodSnapshots.fundFlowSnapshot
+      ? markFundFlowCachedFallback(analysisState.lastGoodSnapshots.fundFlowSnapshot)
+      : buildCachedFundFlowSnapshotFromHistory(analysisState) ?? snapshots.fundFlowSnapshot;
+  const marketBreadthSnapshot =
+    isUsableMarketBreadthSnapshot(snapshots.marketBreadthSnapshot) || snapshots.marketBreadthSnapshot?.unavailableReason === 'cachedFallback'
+      ? snapshots.marketBreadthSnapshot
+      : analysisState.lastGoodSnapshots.marketBreadthSnapshot
+        ? markMarketBreadthCachedFallback(analysisState.lastGoodSnapshots.marketBreadthSnapshot)
+        : snapshots.marketBreadthSnapshot;
+  const northboundCapitalSnapshot =
+    isUsableNorthboundCapitalSnapshot(snapshots.northboundCapitalSnapshot) ||
+    snapshots.northboundCapitalSnapshot?.unavailableReason === 'cachedFallback'
+      ? snapshots.northboundCapitalSnapshot
+      : analysisState.lastGoodSnapshots.northboundCapitalSnapshot
+        ? markNorthboundCachedFallback(analysisState.lastGoodSnapshots.northboundCapitalSnapshot)
+        : snapshots.northboundCapitalSnapshot;
+  const etfDirectionProxySnapshot =
+    isUsableEtfDirectionProxySnapshot(snapshots.etfDirectionProxySnapshot) ||
+    snapshots.etfDirectionProxySnapshot?.unavailableReason === 'cachedFallback'
+      ? snapshots.etfDirectionProxySnapshot
+      : analysisState.lastGoodSnapshots.etfDirectionProxySnapshot
+        ? markEtfDirectionCachedFallback(analysisState.lastGoodSnapshots.etfDirectionProxySnapshot)
+        : snapshots.etfDirectionProxySnapshot;
+
+  return {
+    fundFlowSnapshot,
+    marketBreadthSnapshot,
+    northboundCapitalSnapshot,
+    etfDirectionProxySnapshot,
+  };
+};
+
 const buildCachedFundFlowSnapshotFromHistory = (state: AnalysisStatePayload): FundFlowSnapshot | undefined => {
   const latest = state.fundFlowHistory[0];
   if (!latest?.items.length) return undefined;
@@ -4514,39 +4552,17 @@ const buildPublicNewsSummary = async (env: Env): Promise<PublicNewsSummaryRespon
     quantMode: 'cachedOnly',
   });
   const analysisState = await readGistAnalysisState(env);
-  const effectiveFundFlowSnapshot =
-    fundFlowSnapshot?.items.length
-      ? fundFlowSnapshot
-      : analysisState.lastGoodSnapshots.fundFlowSnapshot
-        ? markFundFlowCachedFallback(analysisState.lastGoodSnapshots.fundFlowSnapshot)
-        : buildCachedFundFlowSnapshotFromHistory(analysisState) ?? fundFlowSnapshot;
-  const effectiveMarketBreadthSnapshot =
-    isUsableMarketBreadthSnapshot(marketBreadthSnapshot) || marketBreadthSnapshot?.unavailableReason === 'cachedFallback'
-      ? marketBreadthSnapshot
-      : analysisState.lastGoodSnapshots.marketBreadthSnapshot
-        ? markMarketBreadthCachedFallback(analysisState.lastGoodSnapshots.marketBreadthSnapshot)
-        : marketBreadthSnapshot;
-  const effectiveNorthboundCapitalSnapshot =
-    isUsableNorthboundCapitalSnapshot(northboundCapitalSnapshot) || northboundCapitalSnapshot?.unavailableReason === 'cachedFallback'
-      ? northboundCapitalSnapshot
-      : analysisState.lastGoodSnapshots.northboundCapitalSnapshot
-        ? markNorthboundCachedFallback(analysisState.lastGoodSnapshots.northboundCapitalSnapshot)
-        : northboundCapitalSnapshot;
-  const effectiveEtfDirectionProxySnapshot =
-    isUsableEtfDirectionProxySnapshot(etfDirectionProxySnapshot) || etfDirectionProxySnapshot?.unavailableReason === 'cachedFallback'
-      ? etfDirectionProxySnapshot
-      : analysisState.lastGoodSnapshots.etfDirectionProxySnapshot
-        ? markEtfDirectionCachedFallback(analysisState.lastGoodSnapshots.etfDirectionProxySnapshot)
-        : etfDirectionProxySnapshot;
-  await writeGistAnalysisState(
-    env,
-    updateLastGoodMarketSnapshots(analysisState, {
-      fundFlowSnapshot: effectiveFundFlowSnapshot,
-      marketBreadthSnapshot: effectiveMarketBreadthSnapshot,
-      northboundCapitalSnapshot: effectiveNorthboundCapitalSnapshot,
-      etfDirectionProxySnapshot: effectiveEtfDirectionProxySnapshot,
-    }),
-  );
+  const {
+    fundFlowSnapshot: effectiveFundFlowSnapshot,
+    marketBreadthSnapshot: effectiveMarketBreadthSnapshot,
+    northboundCapitalSnapshot: effectiveNorthboundCapitalSnapshot,
+    etfDirectionProxySnapshot: effectiveEtfDirectionProxySnapshot,
+  } = resolveEffectiveMarketSnapshots(analysisState, {
+    fundFlowSnapshot,
+    marketBreadthSnapshot,
+    northboundCapitalSnapshot,
+    etfDirectionProxySnapshot,
+  });
   const portfolioKeywords = buildPortfolioNewsKeywords(holdingsSnapshot);
 
   const marketIndices = marketSnapshot?.indices ?? [];
@@ -6295,19 +6311,25 @@ const buildAnalysisMessage = async (
   const fundFlowHistorySummary = buildFundFlowHistorySummary(analysisState);
   const predictionRecordsSummary = buildPredictionRecordsSummary(analysisState);
   const heldFundCodeSet = new Set(snapshot.heldFundCodes);
+  const effectiveSnapshots = resolveEffectiveMarketSnapshots(analysisState, {
+    fundFlowSnapshot,
+    marketBreadthSnapshot,
+    northboundCapitalSnapshot,
+    etfDirectionProxySnapshot,
+  });
   const snapshotWithFallback: HoldingsSnapshot = {
     ...snapshot,
-    fallbackBuildCandidates: buildFallbackBuildCandidates(fundFlowSnapshot, heldFundCodeSet),
+    fallbackBuildCandidates: buildFallbackBuildCandidates(effectiveSnapshots.fundFlowSnapshot, heldFundCodeSet),
   };
   const analysisContext: AnalysisContextSnapshot = {
     holdings: snapshotWithFallback,
     marketSnapshot,
     overseasMarketSnapshot,
     newsSnapshot,
-    fundFlowSnapshot,
-    marketBreadthSnapshot,
-    northboundCapitalSnapshot,
-    etfDirectionProxySnapshot,
+    fundFlowSnapshot: effectiveSnapshots.fundFlowSnapshot,
+    marketBreadthSnapshot: effectiveSnapshots.marketBreadthSnapshot,
+    northboundCapitalSnapshot: effectiveSnapshots.northboundCapitalSnapshot,
+    etfDirectionProxySnapshot: effectiveSnapshots.etfDirectionProxySnapshot,
     fundFlowHistorySummary,
     predictionRecordsSummary,
   };

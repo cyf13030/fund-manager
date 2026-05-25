@@ -308,6 +308,58 @@ const emptyEastMoneyFundFlowPayload = {
   },
 };
 
+const buildAnalysisStatePayload = (overrides: Record<string, unknown> = {}) => ({
+  version: 1,
+  updatedAt: '2026-05-18T10:00:00.000Z',
+  fundFlowHistory: [],
+  predictionRecords: [],
+  fundProfiles: {},
+  lastGoodSnapshots: {},
+  ...overrides,
+});
+
+const buildLastGoodSnapshots = () => ({
+  fundFlowSnapshot: {
+    asOf: '2026-05-18T09:30:00.000Z',
+    provider: 'eastmoney',
+    dataStatus: 'available',
+    items: [
+      { code: 'BK0800', name: '人工智能', category: 'sector', netInflow: 3200000000, netInflowRank: 1 },
+    ],
+  },
+  marketBreadthSnapshot: {
+    asOf: '2026-05-18T09:31:00.000Z',
+    dataStatus: 'available',
+    sampleSize: 2,
+    positiveCount: 1,
+    negativeCount: 1,
+    flatCount: 0,
+    limitUpCount: 0,
+    limitDownCount: 0,
+    averageChangePct: 0.2,
+    turnoverAmount: 1800000000,
+    topAdvancers: [{ code: '000001', name: '平安银行', changePct: 1.2, turnoverAmount: 1000000000 }],
+    topDecliners: [{ code: '000002', name: '万科A', changePct: -0.8, turnoverAmount: 800000000 }],
+  },
+  northboundCapitalSnapshot: {
+    asOf: '2026-05-18T09:32:00.000Z',
+    dataStatus: 'available',
+    northboundNetIn: 2000000000,
+    southboundNetIn: 300000000,
+    netDirection: 'northbound',
+    note: '北向净流入 +17.00 亿，南向 +3.00 亿',
+  },
+  etfDirectionProxySnapshot: {
+    asOf: '2026-05-18T09:33:00.000Z',
+    dataStatus: 'available',
+    averageChangePct: 0.6,
+    positiveCount: 4,
+    negativeCount: 0,
+    label: '偏强',
+    note: 'ETF 方向 proxy 均值 +0.60%，用于辅助判断风险偏好，不等同于净申购。',
+  },
+});
+
 const env = {
   TELEGRAM_BOT_TOKEN: 'telegram-token',
   TELEGRAM_CHAT_ID: '123456',
@@ -739,6 +791,9 @@ describe('telegram ai reminder worker', () => {
               'fund-manager-sync.json': {
                 content: JSON.stringify(backupPayload),
               },
+              'fund-manager-ai-state.json': {
+                content: JSON.stringify(buildAnalysisStatePayload()),
+              },
             },
           }),
         );
@@ -770,6 +825,107 @@ describe('telegram ai reminder worker', () => {
     expect(body.cards.find((card) => card.title === '资金面')?.note).toContain('使用最近一次有效北向/南向口径');
     expect(body.sections.find((section) => section.title === '市场宽度')?.items[0].tag).toBe('缓存宽度');
     expect(body.sections.find((section) => section.title === '资金面')?.items[0].tag).toBe('缓存资金');
+  });
+
+  it('news-summary 冷启动时会从 Gist last-good 快照回退且不写 Gist', async () => {
+    const fetchMock = vi.fn();
+    const lastGoodSnapshots = buildLastGoodSnapshots();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: {
+              'fund-manager-sync.json': {
+                content: JSON.stringify(backupPayload),
+              },
+              'fund-manager-ai-state.json': {
+                content: JSON.stringify(buildAnalysisStatePayload({ lastGoodSnapshots })),
+              },
+            },
+          }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('fund.eastmoney.com/000001.html')) return Promise.resolve(new Response(eastMoneyFundPageText));
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('query1.finance.yahoo.com')) return Promise.resolve(jsonResponse(yahooChartPayload));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) return Promise.reject(new Error('northbound failed'));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get') && url.includes('fid=f3')) {
+        return Promise.reject(new Error('breadth failed'));
+      }
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) return Promise.resolve(jsonResponse(emptyEastMoneyFundFlowPayload));
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(new Request('https://worker.example/news-summary'), env);
+    const body = (await response.json()) as {
+      cards: Array<{ title: string; value: string; note: string }>;
+      sourceStatus: Array<{ label: string; value: string }>;
+    };
+
+    expect(body.sourceStatus.find((item) => item.label === '资金流')?.value).toBe('cached');
+    expect(body.sourceStatus.find((item) => item.label === '市场宽度')?.value).toBe('cached');
+    expect(body.sourceStatus.find((item) => item.label === '北向资金')?.value).toBe('cached');
+    expect(body.cards.find((card) => card.title === '资金流')?.value).toBe('人工智能');
+    expect(body.cards.find((card) => card.title === '市场宽度')?.note).toContain('使用最近一次有效两端样本');
+    expect(
+      fetchMock.mock.calls.some((call) => String(call[0]).includes('api.github.com/gists') && call[1]?.method === 'PATCH'),
+    ).toBe(false);
+  });
+
+  it('bot 分析冷启动时会使用 Gist last-good 快照', async () => {
+    const fetchMock = vi.fn();
+    const lastGoodSnapshots = buildLastGoodSnapshots();
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('api.github.com/gists')) {
+        return Promise.resolve(
+          jsonResponse({
+            files: {
+              'fund-manager-sync.json': {
+                content: JSON.stringify(backupPayload),
+              },
+              'fund-manager-ai-state.json': {
+                content: JSON.stringify(buildAnalysisStatePayload({ lastGoodSnapshots })),
+              },
+            },
+          }),
+        );
+      }
+      if (url.includes('morningstar.cn')) return Promise.resolve(jsonResponse(holdingsPayload));
+      if (url.includes('fund.eastmoney.com/000001.html')) return Promise.resolve(new Response(eastMoneyFundPageText));
+      if (url.includes('fundf10.eastmoney.com')) return Promise.resolve(new Response(eastMoneyHistoricalNavText));
+      if (url.includes('qt.gtimg.cn')) return Promise.resolve(new Response(marketText));
+      if (url.includes('query1.finance.yahoo.com')) return Promise.resolve(jsonResponse(yahooChartPayload));
+      if (url.includes('np-listapi.eastmoney.com')) return Promise.resolve(jsonResponse(eastMoneyNewsPayload));
+      if (url.includes('push2.eastmoney.com/api/qt/kamt/get')) return Promise.reject(new Error('northbound failed'));
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get') && url.includes('fid=f3')) {
+        return Promise.reject(new Error('breadth failed'));
+      }
+      if (url.includes('push2.eastmoney.com/api/qt/clist/get')) return Promise.resolve(jsonResponse(emptyEastMoneyFundFlowPayload));
+      if (url.includes('feed.mix.sina.com.cn')) return Promise.resolve(jsonResponse(sinaNewsPayload));
+      if (url.includes('chat/completions')) {
+        return Promise.resolve(jsonResponse({ choices: [{ message: { content: '组合整体表现良好。' } }] }));
+      }
+      if (url.includes('api.telegram.org')) return Promise.resolve(jsonResponse({ ok: true }));
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await worker.fetch(new Request('https://worker.example/run', { method: 'POST' }), env);
+    const aiBody = findAiRequestBody(fetchMock);
+
+    expect(response.status).toBe(200);
+    expect(aiBody.messages[0].content).toContain('资金流数据: partial');
+    expect(aiBody.messages[0].content).toContain('资金流入最强方向: 人工智能');
+    expect(aiBody.messages[0].content).toContain('marketBreadthSnapshot');
+    expect(aiBody.messages[0].content).toContain('northboundCapitalSnapshot');
+    expect(aiBody.messages[0].content).toContain('cachedFallback');
   });
 
   it('读取 Gist 持仓、调用 AI 并发送 Telegram', async () => {
